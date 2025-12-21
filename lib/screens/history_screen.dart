@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/summary_storage_service.dart';
+import 'note_detail_screen.dart';
 
 /// Screen to view history of processed voice notes
 class HistoryScreen extends StatefulWidget {
@@ -12,7 +13,10 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   final SummaryStorageService _storageService = SummaryStorageService();
   List<SummaryRecord> _records = [];
+  List<SummaryRecord> _filteredRecords = [];
   bool _isLoading = true;
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -24,7 +28,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final records = await _storageService.getAllRecords();
     setState(() {
       _records = records;
+      _filteredRecords = records;
       _isLoading = false;
+    });
+  }
+
+  void _filterRecords(String query) {
+    if (query.isEmpty) {
+      setState(() {
+        _filteredRecords = _records;
+      });
+      return;
+    }
+
+    final lowerQuery = query.toLowerCase();
+    setState(() {
+      _filteredRecords = _records.where((record) {
+        return record.sourceFileName.toLowerCase().contains(lowerQuery) ||
+            record.summary.toLowerCase().contains(lowerQuery) ||
+            record.transcript.toLowerCase().contains(lowerQuery);
+      }).toList();
     });
   }
 
@@ -34,13 +57,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
       backgroundColor: const Color(0xFF0D0D1A),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A1A2E),
-        title: const Text(
-          'History',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(
+                  hintText: 'Search notes...',
+                  hintStyle: TextStyle(color: Colors.grey),
+                  border: InputBorder.none,
+                ),
+                onChanged: _filterRecords,
+              )
+            : const Text(
+                'History',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          if (_records.isNotEmpty)
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close : Icons.search),
+            onPressed: () {
+              setState(() {
+                if (_isSearching) {
+                  _isSearching = false;
+                  _searchController.clear();
+                  _filterRecords('');
+                } else {
+                  _isSearching = true;
+                }
+              });
+            },
+          ),
+          if (_records.isNotEmpty && !_isSearching)
             IconButton(
               icon: const Icon(Icons.delete_sweep),
               onPressed: _confirmClearAll,
@@ -54,7 +106,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
             )
           : _records.isEmpty
           ? _buildEmptyState()
+          : _filteredRecords.isEmpty
+          ? _buildNoSearchResults()
           : _buildHistoryList(),
+    );
+  }
+
+  Widget _buildNoSearchResults() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.search_off, size: 60, color: Colors.white.withAlpha(50)),
+          const SizedBox(height: 16),
+          Text(
+            'No matching notes found',
+            style: TextStyle(color: Colors.white.withAlpha(150), fontSize: 16),
+          ),
+        ],
+      ),
     );
   }
 
@@ -82,9 +152,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildHistoryList() {
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: _records.length,
+      itemCount: _filteredRecords.length,
       itemBuilder: (context, index) {
-        final record = _records[index];
+        final record = _filteredRecords[index];
         return _buildRecordCard(record);
       },
     );
@@ -97,7 +167,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: () => _showRecordDetail(record),
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => NoteDetailScreen(record: record),
+            ),
+          );
+        },
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -198,137 +275,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
           Text(
             label,
             style: TextStyle(color: Colors.white.withAlpha(120), fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showRecordDetail(SummaryRecord record) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.9,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        builder: (context, scrollController) => Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFF1A1A2E),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: Column(
-            children: [
-              // Handle
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white.withAlpha(50),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              // Header
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        record.sourceFileName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      record.formattedDate,
-                      style: TextStyle(
-                        color: Colors.white.withAlpha(100),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              // Content
-              Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  children: [
-                    _buildSection('Summary', record.summary),
-                    _buildSection(
-                      'Key Points',
-                      record.keyPoints.map((p) => '• $p').join('\n'),
-                    ),
-                    _buildSection('Action Items', record.actionItems),
-                    _buildSection('Full Transcript', record.transcript),
-                    const SizedBox(height: 20),
-                    // Metadata
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withAlpha(5),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Metadata',
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(100),
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Transcript Length: ${record.transcriptLength} characters',
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(80),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 40),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSection(String title, String content) {
-    if (content.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Color(0xFF00D9FF),
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            content,
-            style: TextStyle(color: Colors.white.withAlpha(200), fontSize: 14),
           ),
         ],
       ),

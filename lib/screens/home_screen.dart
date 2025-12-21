@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/processing_state.dart';
 import '../services/audio_recorder_service.dart';
+import 'package:audio_waveforms/audio_waveforms.dart';
 import 'history_screen.dart';
 import 'queue_screen.dart';
 import 'settings_screen.dart';
@@ -35,6 +36,7 @@ class _HomeScreenState extends State<HomeScreen>
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<RecordingState>? _stateSubscription;
   bool _isPaused = false;
+  bool _isStopping = false;
 
   @override
   void initState() {
@@ -146,19 +148,25 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _stopRecording() async {
-    final file = await _recorderService.stopRecording();
-    if (file != null && mounted) {
-      final state = context.read<ProcessingState>();
-      state.queueFile(file);
-      widget.onProcessingStart?.call();
+    if (_isStopping) return;
+    setState(() => _isStopping = true);
+    try {
+      final file = await _recorderService.stopRecording();
+      if (file != null && mounted) {
+        final state = context.read<ProcessingState>();
+        state.queueFile(file);
+        widget.onProcessingStart?.call();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Recording added to queue'),
-          backgroundColor: Color(0xFF00D9FF),
-          duration: Duration(seconds: 1),
-        ),
-      );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Recording added to queue'),
+            backgroundColor: Color(0xFF00D9FF),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isStopping = false);
     }
   }
 
@@ -171,15 +179,21 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _cancelRecording() async {
-    await _recorderService.cancelRecording();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Recording cancelled'),
-          backgroundColor: Colors.grey[700],
-          duration: const Duration(seconds: 1),
-        ),
-      );
+    if (_isStopping) return;
+    setState(() => _isStopping = true);
+    try {
+      await _recorderService.cancelRecording();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Recording cancelled'),
+            backgroundColor: Colors.grey[700],
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isStopping = false);
     }
   }
 
@@ -543,19 +557,70 @@ class _HomeScreenState extends State<HomeScreen>
 
                 const SizedBox(height: 48),
 
-                // Simulated Waveform
-                SizedBox(
-                  height: 60,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: List.generate(15, (index) {
-                      return _SimulatedWaveBar(
-                        index: index,
-                        isAnimating: _isRecording && !_isPaused,
-                      );
-                    }),
+                // Real Waveform using audio_waveforms package
+                if (_isRecording)
+                  SizedBox(
+                    height: 80, // Keeps layout compact
+                    child: Center(
+                      child: OverflowBox(
+                        minHeight: 0,
+                        maxHeight: 500,
+                        alignment: Alignment.center,
+                        child: Transform.scale(
+                          scaleY: 6.0, // 6x Boost (High Sensitivity)
+                          child: AudioWaveforms(
+                            size: Size(
+                              MediaQuery.of(context).size.width * 0.9,
+                              60,
+                            ), // 60px Base Height to prevent internal flat-topping
+                            recorderController:
+                                _recorderService.recorderController,
+                            enableGesture: false,
+                            waveStyle: WaveStyle(
+                              waveColor: const Color(0xFF00D9FF),
+                              extendWaveform: true,
+                              showMiddleLine: false,
+                              spacing: 5.0,
+                              waveThickness:
+                                  2.0, // Thin lines to keep silence subtle
+                              showDurationLabel: false,
+                              gradient: ui.Gradient.linear(
+                                const Offset(0, 0),
+                                const Offset(
+                                  0,
+                                  60,
+                                ), // Gradient matches 60px height
+                                [
+                                  const Color(0xFF00D9FF),
+                                  const Color(0xFFFF4444),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  SizedBox(
+                    height: 60,
+                    width: MediaQuery.of(context).size.width * 0.8,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(
+                        30,
+                        (index) => Container(
+                          width: 4,
+                          height: 10,
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF00D9FF).withAlpha(100),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
 
                 const Spacer(flex: 3),
 
@@ -614,11 +679,19 @@ class _HomeScreenState extends State<HomeScreen>
                                   ),
                                 ],
                               ),
-                              child: const Icon(
-                                Icons.check,
-                                color: Colors.white,
-                                size: 28,
-                              ),
+                              child: _isStopping
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 3,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.check,
+                                      color: Colors.white,
+                                      size: 28,
+                                    ),
                             ),
                             const SizedBox(height: 8),
                             const Text(
@@ -995,82 +1068,5 @@ class _QueueStatusCard extends StatelessWidget {
     if (d.inSeconds < 60) return '${d.inSeconds}s';
     if (d.inMinutes < 60) return '${d.inMinutes}m ${d.inSeconds % 60}s';
     return '${d.inHours}h ${d.inMinutes % 60}m';
-  }
-}
-
-class _SimulatedWaveBar extends StatefulWidget {
-  final int index;
-  final bool isAnimating;
-
-  const _SimulatedWaveBar({required this.index, required this.isAnimating});
-
-  @override
-  State<_SimulatedWaveBar> createState() => _SimulatedWaveBarState();
-}
-
-class _SimulatedWaveBarState extends State<_SimulatedWaveBar>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: Duration(milliseconds: 300 + (widget.index * 50) % 500),
-    );
-
-    _setupAnimation();
-
-    if (widget.isAnimating) {
-      _controller.repeat(reverse: true);
-    }
-  }
-
-  void _setupAnimation() {
-    _animation = Tween<double>(
-      begin: 0.2,
-      end: 1.0,
-    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-  }
-
-  @override
-  void didUpdateWidget(_SimulatedWaveBar oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isAnimating != oldWidget.isAnimating) {
-      if (widget.isAnimating) {
-        _controller.repeat(reverse: true);
-      } else {
-        _controller.stop();
-        _controller.animateTo(0.2, duration: const Duration(milliseconds: 200));
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, child) {
-        return Container(
-          width: 6,
-          height: 40 * _animation.value,
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: const Color(
-              0xFF00D9FF,
-            ).withAlpha((255 * _animation.value).toInt()),
-            borderRadius: BorderRadius.circular(3),
-          ),
-        );
-      },
-    );
   }
 }

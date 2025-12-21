@@ -680,6 +680,9 @@ Interview subject/topic
   ModelStatus get modelStatus => _modelStatus;
   String get modelStatusMessage => _modelStatusMessage;
 
+  // Expose service for chat
+  GemmaAudioService get gemmaService => _gemmaService;
+
   /// Get transcript from Gemma result (for UI compatibility)
   TranscriptionResult? get transcriptionResult {
     if (_gemmaResult == null) return null;

@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:record/record.dart';
+import 'package:audio_waveforms/audio_waveforms.dart';
 
-/// Service for handling native audio recording
+/// Service for handling native audio recording using audio_waveforms package.
+/// Provides integrated waveform visualization via RecorderController.
 class AudioRecorderService {
-  final AudioRecorder _recorder = AudioRecorder();
+  final RecorderController recorderController = RecorderController();
 
   bool _isRecording = false;
   bool _isPaused = false;
@@ -32,13 +32,12 @@ class AudioRecorderService {
 
   /// Check and request microphone permission
   Future<bool> requestPermission() async {
-    final status = await Permission.microphone.request();
-    return status.isGranted;
+    return await recorderController.checkPermission();
   }
 
   /// Check if microphone permission is granted
   Future<bool> hasPermission() async {
-    return await Permission.microphone.isGranted;
+    return await recorderController.checkPermission();
   }
 
   /// Start recording audio
@@ -46,16 +45,7 @@ class AudioRecorderService {
     try {
       // Check permission first
       if (!await hasPermission()) {
-        final granted = await requestPermission();
-        if (!granted) {
-          debugPrint('AudioRecorder: Microphone permission denied');
-          return false;
-        }
-      }
-
-      // Check if recorder is available
-      if (!await _recorder.hasPermission()) {
-        debugPrint('AudioRecorder: Recorder permission check failed');
+        debugPrint('AudioRecorder: Microphone permission denied');
         return false;
       }
 
@@ -64,15 +54,8 @@ class AudioRecorderService {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       _currentRecordingPath = '${dir.path}/recording_$timestamp.m4a';
 
-      // Configure and start recording
-      await _recorder.start(
-        RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          bitRate: 128000,
-          sampleRate: 44100,
-        ),
-        path: _currentRecordingPath!,
-      );
+      // Start recording with RecorderController
+      await recorderController.record(path: _currentRecordingPath);
 
       _isRecording = true;
       _isPaused = false;
@@ -95,7 +78,7 @@ class AudioRecorderService {
     if (!_isRecording || _isPaused) return;
 
     try {
-      await _recorder.pause();
+      await recorderController.pause();
       _isPaused = true;
       _pauseStartTime = DateTime.now();
       _durationTimer?.cancel();
@@ -111,7 +94,7 @@ class AudioRecorderService {
     if (!_isRecording || !_isPaused) return;
 
     try {
-      await _recorder.resume();
+      await recorderController.record();
       _isPaused = false;
 
       // Track paused duration
@@ -128,18 +111,19 @@ class AudioRecorderService {
     }
   }
 
-  /// Stop recording and return the file
+  /// Stop recording and return the file (converted to WAV)
   Future<File?> stopRecording() async {
     if (!_isRecording) return null;
 
     try {
-      final path = await _recorder.stop();
+      final path = await recorderController.stop();
       _cleanup();
 
       if (path != null && path.isNotEmpty) {
         final file = File(path);
         if (await file.exists()) {
-          debugPrint('AudioRecorder: Stopped, file at $path');
+          debugPrint('AudioRecorder: Stopped recording at $path');
+          // Return raw file immediately - let ProcessingState handle conversion in background
           return file;
         }
       }
@@ -158,7 +142,7 @@ class AudioRecorderService {
     if (!_isRecording) return;
 
     try {
-      await _recorder.stop();
+      await recorderController.stop();
 
       // Delete the partial file
       if (_currentRecordingPath != null) {
@@ -185,7 +169,9 @@ class AudioRecorderService {
 
   void _startDurationTimer() {
     _durationTimer?.cancel();
-    _durationTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+    _durationTimer = Timer.periodic(const Duration(milliseconds: 100), (
+      _,
+    ) async {
       if (_isRecording && !_isPaused) {
         _durationController.add(currentDuration);
       }
@@ -208,7 +194,7 @@ class AudioRecorderService {
     _durationTimer?.cancel();
     _durationController.close();
     _stateController.close();
-    _recorder.dispose();
+    recorderController.dispose();
   }
 }
 

@@ -9,6 +9,9 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.EventChannel.EventSink
+import io.flutter.plugin.common.EventChannel.StreamHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -35,6 +38,7 @@ class GemmaAudioPlugin : FlutterPlugin, MethodCallHandler {
     
     companion object {
         const val CHANNEL_NAME = "com.voicenotesummarizer/gemma_audio"
+        const val STREAM_CHANNEL_NAME = "com.voicenotesummarizer/gemma_audio/chat_stream"
         private const val TAG = "GemmaAudioPlugin"
         
         // System prompts
@@ -82,8 +86,22 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         context = flutterPluginBinding.applicationContext
         channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
         channel.setMethodCallHandler(this)
+        
+        val eventChannel = EventChannel(flutterPluginBinding.binaryMessenger, STREAM_CHANNEL_NAME)
+        eventChannel.setStreamHandler(object : StreamHandler {
+            override fun onListen(arguments: Any?, events: EventSink?) {
+                eventSink = events
+            }
+            override fun onCancel(arguments: Any?) {
+                eventSink = null
+            }
+        })
+        
         Log.d(TAG, "Plugin attached")
     }
+    
+    // Sink for streaming responses
+    private var eventSink: EventSink? = null
     
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
@@ -96,6 +114,9 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             "transcribe" -> transcribe(call, result)
             "transcribeAndSummarize" -> transcribeAndSummarize(call, result)
             "generateResponse" -> generateResponse(call, result)
+            "generateResponse" -> generateResponse(call, result)
+            "chat" -> chat(call, result)
+            "chatStream" -> chatStream(call, result)
             "isInitialized" -> result.success(GemmaRuntime.isReady())
             "dispose" -> dispose(result)
             else -> result.notImplemented()
@@ -203,6 +224,55 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         }
     }
     
+    private fun chat(call: MethodCall, result: Result) {
+        val transcript = call.argument<String>("transcript")
+        val prompt = call.argument<String>("prompt")
+        
+        if (transcript == null || prompt == null) {
+            result.error("INVALID_ARGS", "transcript and prompt required", null)
+            return
+        }
+        
+        GemmaRuntime.scope.launch {
+            mutex.withLock {
+                try {
+                    val response = runTextInference(transcript, prompt)
+                    mainHandler.post { result.success(mapOf("success" to true, "response" to response)) }
+                } catch (e: Exception) {
+                    mainHandler.post { result.error("INFERENCE_FAILED", e.message, null) }
+                }
+            }
+        }
+    }
+    
+    private fun chatStream(call: MethodCall, result: Result) {
+        val transcript = call.argument<String>("transcript")
+        val prompt = call.argument<String>("prompt")
+        
+        if (transcript == null || prompt == null) {
+            result.error("INVALID_ARGS", "transcript and prompt required", null)
+            return
+        }
+        
+        if (eventSink == null) {
+            result.error("NO_LISTENER", "No event sink registered. Listen to stream first.", null)
+            return
+        }
+        
+        // Return success immediately to indicate processing started
+        result.success(true)
+        
+        GemmaRuntime.scope.launch {
+            mutex.withLock {
+                try {
+                    runTextInferenceStream(transcript, prompt)
+                } catch (e: Exception) {
+                    mainHandler.post { eventSink?.error("INFERENCE_FAILED", e.message, null) }
+                }
+            }
+        }
+    }
+    
     // ========== CORE INFERENCE ==========
     
     private suspend fun doTranscribe(audioPath: String, systemInstruction: String?, promptInstruction: String?): String {
@@ -272,6 +342,21 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         
         return runInference(eng, config, message)
     }
+
+    private suspend fun runTextInference(transcript: String, userPrompt: String): String {
+        val modelFile = ModelStore.ensureModelReady(context)
+        val eng = GemmaRuntime.getEngine(context, modelFile)
+        
+        val config = ConversationConfig(
+            samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.7) // Higher temp for creative chat
+        )
+        
+        val fullPrompt = "Context (Transcript):\n$transcript\n\nUser Question: $userPrompt"
+        
+        val message = Message.of(fullPrompt)
+        
+        return runInference(eng, config, message)
+    }
     
     private suspend fun runInference(engine: Engine, config: ConversationConfig, message: Message): String = 
         withContext(Dispatchers.IO) {
@@ -293,6 +378,49 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             }
             
             sb.toString().trim()
+        }
+        
+    private suspend fun runTextInferenceStream(transcript: String, userPrompt: String) {
+        val modelFile = ModelStore.ensureModelReady(context)
+        val eng = GemmaRuntime.getEngine(context, modelFile)
+        
+        val config = ConversationConfig(
+            samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.7)
+        )
+        
+        val fullPrompt = "Context (Transcript):\n$transcript\n\nUser Question: $userPrompt"
+        val message = Message.of(fullPrompt)
+        
+        runInferenceStream(eng, config, message)
+    }
+
+    private suspend fun runInferenceStream(engine: Engine, config: ConversationConfig, message: Message) = 
+        withContext(Dispatchers.IO) {
+             val latch = java.util.concurrent.CountDownLatch(1)
+             
+             engine.createConversation(config).use { conv ->
+                conv.sendMessageAsync(message, object : MessageCallback {
+                    override fun onMessage(msg: Message) { 
+                        // Stream chunk to Flutter
+                        val text = msg.toString()
+                        if (text.isNotEmpty()) {
+                            mainHandler.post { eventSink?.success(text) }
+                        }
+                    }
+                    override fun onDone() { 
+                        mainHandler.post { eventSink?.success("[DONE]") } // Signal completion
+                        latch.countDown() 
+                    }
+                    override fun onError(t: Throwable) { 
+                         mainHandler.post { eventSink?.error("GEN_ERROR", t.message, null) }
+                         latch.countDown() 
+                    }
+                })
+                
+                if (!latch.await(90, java.util.concurrent.TimeUnit.SECONDS)) {
+                    mainHandler.post { eventSink?.error("TIMEOUT", "Generation timed out", null) }
+                }
+             }
         }
     
     private fun validateWav(file: File) {

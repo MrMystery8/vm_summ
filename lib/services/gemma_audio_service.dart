@@ -151,6 +151,9 @@ class GemmaAudioService {
   static const _progressChannel = EventChannel(
     'com.voicenotesummarizer/gemma_model_manager/progress',
   );
+  static const _streamChannel = EventChannel(
+    'com.voicenotesummarizer/gemma_audio/chat_stream',
+  );
 
   bool _initialized = false;
   String? _modelPath;
@@ -392,7 +395,7 @@ class GemmaAudioService {
     File audioFile, {
     String? language,
   }) async {
-    _ensureInitialized();
+    await _ensureReady();
 
     try {
       final result = await _audioChannel.invokeMethod('transcribe', {
@@ -421,7 +424,7 @@ class GemmaAudioService {
     String? transcriptionSystem,
     String? transcriptionPrompt,
   }) async {
-    _ensureInitialized();
+    await _ensureReady();
 
     try {
       final result = await _audioChannel.invokeMethod(
@@ -452,7 +455,7 @@ class GemmaAudioService {
     File audioFile,
     String prompt,
   ) async {
-    _ensureInitialized();
+    await _ensureReady();
 
     try {
       final result = await _audioChannel.invokeMethod('generateResponse', {
@@ -466,6 +469,98 @@ class GemmaAudioService {
     }
   }
 
+  /// Chat with a note using its transcript.
+  ///
+  /// [transcript] - The full transcript of the note
+  /// [userMessage] - The user's question or message
+  Future<String> chatWithTranscript(
+    String transcript,
+    String userMessage,
+  ) async {
+    await _ensureReady();
+
+    try {
+      final result = await _audioChannel.invokeMethod('chat', {
+        'transcript': transcript,
+        'prompt': userMessage,
+      });
+
+      final map = result as Map;
+      return map['response'] as String;
+    } on PlatformException catch (e) {
+      throw Exception('Chat failed: ${e.message}');
+    }
+  }
+
+  /// Chat with a note (Streaming).
+  ///
+  /// Returns a stream of text chunks.
+  Stream<String> chatWithTranscriptStream(
+    String transcript,
+    String userMessage,
+  ) async* {
+    await _ensureReady();
+
+    final controller = StreamController<String>();
+
+    // Subscribe to event channel
+    final subscription = _streamChannel.receiveBroadcastStream().listen(
+      (event) {
+        if (event == '[DONE]') {
+          controller.close();
+        } else if (event is String) {
+          controller.add(event);
+        }
+      },
+      onError: (error) {
+        controller.addError(error);
+      },
+    );
+
+    try {
+      // Trigger generation
+      await _audioChannel.invokeMethod('chatStream', {
+        'transcript': transcript,
+        'prompt': userMessage,
+      });
+    } catch (e) {
+      controller.addError(e);
+      await subscription.cancel();
+      await controller.close();
+      return;
+    }
+
+    // Yield from controller
+    yield* controller.stream;
+
+    // Cleanup when stream completes or cancelled
+    // Note: The controller is closed by [DONE] or error
+  }
+
+  /// Ensure service is initialized, checking native side if needed.
+  Future<void> _ensureReady() async {
+    if (_initialized) return;
+
+    if (!isPlatformSupported) {
+      throw UnsupportedError('Gemma audio is only supported on Android');
+    }
+
+    try {
+      final isNativeReady = await _audioChannel.invokeMethod('isInitialized');
+      if (isNativeReady == true) {
+        _initialized = true;
+        // Ideally we'd sync _modelPath here too, but it's optional
+        return;
+      }
+    } catch (e) {
+      debugPrint('Validation check failed: $e');
+    }
+
+    throw StateError(
+      'GemmaAudioService not initialized. Call initialize() first.',
+    );
+  }
+
   /// Process audio in chunks for files longer than 30 seconds.
   ///
   /// Automatically splits audio into 30s chunks and combines results.
@@ -475,7 +570,7 @@ class GemmaAudioService {
     String? language,
     int chunkDurationSeconds = 30,
   }) async {
-    _ensureInitialized();
+    await _ensureReady();
 
     // TODO: Implement actual chunking with audio duration detection
     // For now, just process as single chunk
@@ -497,17 +592,6 @@ class GemmaAudioService {
       debugPrint('GemmaAudioService: Disposed');
     } on PlatformException catch (e) {
       debugPrint('GemmaAudioService: Dispose failed: ${e.message}');
-    }
-  }
-
-  void _ensureInitialized() {
-    if (!isPlatformSupported) {
-      throw UnsupportedError('Gemma audio is only supported on Android');
-    }
-    if (!_initialized) {
-      throw StateError(
-        'GemmaAudioService not initialized. Call initialize() first.',
-      );
     }
   }
 }

@@ -57,6 +57,10 @@ dependencies:
   share_plus: ^10.1.4
   flutter_local_notifications: ^19.5.0
   flutter_foreground_task: ^7.1.1
+  
+  # Chat & UI
+  flutter_markdown: ^0.6.14
+  audio_waveforms: ^2.0.1
 
 dev_dependencies:
   flutter_test:
