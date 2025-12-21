@@ -50,6 +50,9 @@ dependencies:
   # Audio playback
   audioplayers: ^6.1.0
   
+  # Audio recording
+  record: ^6.0.0
+  
   # Sharing
   share_plus: ^10.1.4
   flutter_local_notifications: ^19.5.0

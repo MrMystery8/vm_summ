@@ -97,25 +97,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             return DropdownMenuItem<PromptPreset>(
                               value: preset,
                               child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Text(
-                                    preset.name,
-                                    style: const TextStyle(color: Colors.white),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.delete_outline,
-                                      size: 20,
-                                      color: Colors.redAccent,
+                                  // Built-in indicator
+                                  if (preset.isBuiltIn)
+                                    Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(
+                                          0xFF00D9FF,
+                                        ).withAlpha(30),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: const Text(
+                                        'BUILT-IN',
+                                        style: TextStyle(
+                                          color: Color(0xFF00D9FF),
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                     ),
-                                    onPressed: () {
-                                      context
-                                          .read<ProcessingState>()
-                                          .deletePreset(preset);
-                                    },
+                                  Expanded(
+                                    child: Text(
+                                      preset.name,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: preset.isBuiltIn
+                                            ? FontWeight.w500
+                                            : FontWeight.normal,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
+                                  // Only show delete for user presets
+                                  if (!preset.isBuiltIn)
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.delete_outline,
+                                        size: 20,
+                                        color: Colors.redAccent,
+                                      ),
+                                      onPressed: () {
+                                        context
+                                            .read<ProcessingState>()
+                                            .deletePreset(preset);
+                                      },
+                                    ),
                                 ],
                               ),
                             );

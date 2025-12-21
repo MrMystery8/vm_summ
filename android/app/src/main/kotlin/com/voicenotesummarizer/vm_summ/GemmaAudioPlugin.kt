@@ -236,8 +236,20 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.3)
         )
         
-        val userPromptPrefix = queryInstruction ?: "Analyze this transcript:"
-        val prompt = "$userPromptPrefix\n\n$transcript"
+        Log.d(TAG, "Transcript for summary (length=${transcript.length}): ${transcript.take(100)}...")
+        
+        if (transcript.isBlank() || transcript.length < 5) {
+             Log.w(TAG, "Transcript is empty or too short. Skipping summarization.")
+             return mapOf(
+                 "title" to "Error: Empty Transcript",
+                 "summary" to "The audio could not be transcribed or was silent.",
+                 "keyPoints" to emptyList<String>(),
+                 "actionItems" to "None"
+             )
+        }
+
+        val userPromptPrefix = queryInstruction ?: "Analyze the following transcript and provide the summary, title, key points, and action items as requested:"
+        val prompt = "$userPromptPrefix\n\n<TRANSCRIPT>\n$transcript\n</TRANSCRIPT>"
         val response = runInference(eng, config, Message.of(prompt))
         
         Log.d(TAG, "Summary response: ${response.take(200)}...")
@@ -309,11 +321,11 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             val trimmed = line.trim()
             val lower = trimmed.lowercase()
             
-            // Standardized Markdown Header Detection
-            if (lower.startsWith("## title") || lower.startsWith("**title**") || lower.startsWith("title:")) { section = "title"; continue }
-            if (lower.startsWith("## summary") || lower.startsWith("**summary**") || lower.startsWith("summary:")) { section = "summary"; continue }
-            if (lower.startsWith("## key points") || lower.startsWith("**key points**") || lower.startsWith("key points:")) { section = "keypoints"; continue }
-            if (lower.startsWith("## action items") || lower.startsWith("**action items**") || lower.startsWith("action items:")) { section = "actions"; continue }
+            // Standardized Markdown Header Detection (More permissive)
+            if (lower.contains("## title") || lower.contains("**title**") || lower.startsWith("title:") || lower == "title") { section = "title"; continue }
+            if (lower.contains("## summary") || lower.contains("**summary**") || lower.startsWith("summary:") || lower == "summary") { section = "summary"; continue }
+            if (lower.contains("## key points") || lower.contains("**key points**") || lower.startsWith("key points:") || lower == "key points") { section = "keypoints"; continue }
+            if (lower.contains("## action items") || lower.contains("**action items**") || lower.startsWith("action items:") || lower == "action items") { section = "actions"; continue }
             
             if (trimmed.isBlank()) continue
             if (trimmed.startsWith("##")) continue // Skip other headers
@@ -326,7 +338,20 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
                 "summary" -> summaryLines.add(cleaned)
                 "keypoints" -> keyPointLines.add(cleaned)
                 "actions" -> if (!cleaned.equals("none", true)) actionLines.add(cleaned)
+                else -> {
+                    // Fallback: If no section header found yet, treat first few valid lines as Summary 
+                    // (LLM sometimes forgets headers for short queries)
+                    if (section.isEmpty() && summaryLines.size < 3) {
+                        summaryLines.add(cleaned)
+                    }
+                }
             }
+        }
+        
+        // Title Fallback: Use first key point or summary snippet if missing
+        if (titleLine == null) {
+            if (keyPointLines.isNotEmpty()) titleLine = keyPointLines.first().take(50)
+            else if (summaryLines.isNotEmpty()) titleLine = summaryLines.first().take(40)
         }
         
         // Title
@@ -335,6 +360,9 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         // Build paragraph summary
         if (summaryLines.isNotEmpty()) {
             result["summary"] = summaryLines.joinToString(" ")
+        } else {
+             // Fallback if absolutely no summary
+             result["summary"] = "No summary generated."
         }
         
         // Key points as list

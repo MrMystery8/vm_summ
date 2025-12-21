@@ -220,13 +220,152 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
   String _queryInstruction = defaultQueryInstruction;
   String _transcriptionSystemInstruction = defaultTranscriptionSystem;
   String _transcriptionPrompt = defaultTranscriptionPrompt;
-  List<PromptPreset> _presets = [];
+  List<PromptPreset> _userPresets = [];
+
+  // Predefined built-in presets
+  static final List<PromptPreset> predefinedPresets = [
+    PromptPreset(
+      name: '📋 Meeting Minutes',
+      systemInstruction: '''You are a meeting notes specialist.
+
+Extract and organize meeting information in this format:
+
+## TITLE
+Brief meeting title (3-6 words)
+
+## ATTENDEES
+List people mentioned or speaking
+
+## SUMMARY
+2-3 sentence overview of the meeting
+
+## DECISIONS MADE
+- Key decisions reached
+
+## ACTION ITEMS
+- Task: [person responsible] - [deadline if mentioned]
+
+## NEXT STEPS
+Upcoming meetings or follow-ups mentioned''',
+      queryInstruction: 'Extract meeting notes from this transcript:',
+      transcriptionSystem: defaultTranscriptionSystem,
+      transcriptionPrompt: defaultTranscriptionPrompt,
+      isBuiltIn: true,
+    ),
+    PromptPreset(
+      name: '🌐 Translate to English',
+      systemInstruction: '''You are a professional translator.
+
+Translate the entire content to English while:
+- Preserving the original meaning and tone
+- Keeping proper nouns unchanged
+- Maintaining paragraph structure
+- Noting any idioms or cultural references
+
+Output format:
+## TRANSLATION
+[Full English translation]
+
+## NOTES
+Any translation notes or cultural context''',
+      queryInstruction: 'Translate this transcript to English:',
+      transcriptionSystem:
+          'Transcribe the audio exactly as spoken in the original language. Do not translate.',
+      transcriptionPrompt: 'Transcribe verbatim in the original language.',
+      isBuiltIn: true,
+    ),
+    PromptPreset(
+      name: '⚡ Quick Summary',
+      systemInstruction: '''You are a concise summarization assistant.
+
+Provide an ultra-brief summary in this format:
+
+## TITLE
+2-4 word title
+
+## TL;DR
+One sentence summary (max 20 words)
+
+## KEY POINTS
+- Point 1
+- Point 2
+- Point 3
+(maximum 3 points, each under 8 words)''',
+      queryInstruction: 'Give a quick summary:',
+      transcriptionSystem: defaultTranscriptionSystem,
+      transcriptionPrompt: defaultTranscriptionPrompt,
+      isBuiltIn: true,
+    ),
+    PromptPreset(
+      name: '📚 Lecture Notes',
+      systemInstruction: '''You are an academic note-taking assistant.
+
+Organize lecture content in this format:
+
+## TITLE
+Lecture topic (3-6 words)
+
+## MAIN CONCEPTS
+### Concept 1
+Definition and explanation
+
+### Concept 2
+Definition and explanation
+
+## KEY TERMS
+- **Term**: Definition
+
+## EXAMPLES MENTIONED
+- Example and its context
+
+## QUESTIONS TO REVIEW
+- Important questions raised''',
+      queryInstruction: 'Create lecture notes from this transcript:',
+      transcriptionSystem: defaultTranscriptionSystem,
+      transcriptionPrompt: defaultTranscriptionPrompt,
+      isBuiltIn: true,
+    ),
+    PromptPreset(
+      name: '🎤 Interview Notes',
+      systemInstruction: '''You are an interview documentation specialist.
+
+Organize interview content in this format:
+
+## TITLE
+Interview subject/topic
+
+## PARTICIPANTS
+- Interviewer(s)
+- Interviewee(s)
+
+## Q&A SUMMARY
+**Q:** Question asked
+**A:** Key points from answer
+
+(Repeat for major questions)
+
+## KEY INSIGHTS
+- Notable quotes or insights
+
+## FOLLOW-UP TOPICS
+- Areas for further exploration''',
+      queryInstruction: 'Extract interview notes from this transcript:',
+      transcriptionSystem: defaultTranscriptionSystem,
+      transcriptionPrompt: defaultTranscriptionPrompt,
+      isBuiltIn: true,
+    ),
+  ];
 
   String get systemInstruction => _systemInstruction;
   String get queryInstruction => _queryInstruction;
   String get transcriptionSystem => _transcriptionSystemInstruction;
   String get transcriptionPrompt => _transcriptionPrompt;
-  List<PromptPreset> get presets => _presets;
+
+  /// All presets: predefined + user-created
+  List<PromptPreset> get presets => [...predefinedPresets, ..._userPresets];
+
+  /// Only user-created presets
+  List<PromptPreset> get userPresets => _userPresets;
 
   Future<void> updateSystemInstruction(String value) async {
     _systemInstruction = value;
@@ -263,14 +402,17 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
       queryInstruction: _queryInstruction,
       transcriptionSystem: _transcriptionSystemInstruction,
       transcriptionPrompt: _transcriptionPrompt,
+      isBuiltIn: false,
     );
-    _presets.add(newPreset);
+    _userPresets.add(newPreset);
     await _savePresets();
     notifyListeners();
   }
 
   Future<void> deletePreset(PromptPreset preset) async {
-    _presets.removeWhere((p) => p.name == preset.name);
+    // Don't allow deleting built-in presets
+    if (preset.isBuiltIn) return;
+    _userPresets.removeWhere((p) => p.name == preset.name);
     await _savePresets();
     notifyListeners();
   }
@@ -284,7 +426,8 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
 
   Future<void> _savePresets() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonList = _presets.map((p) => p.toJson()).toList();
+    // Only save user presets (not built-in)
+    final jsonList = _userPresets.map((p) => p.toJson()).toList();
     await prefs.setString('prompt_presets', jsonEncode(jsonList));
   }
 
@@ -312,12 +455,14 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
     _transcriptionPrompt =
         prefs.getString('transcriptionPrompt') ?? defaultTranscriptionPrompt;
 
-    // Load presets
+    // Load user presets (predefined are always available)
     final presetsJson = prefs.getString('prompt_presets');
     if (presetsJson != null) {
       try {
         final List<dynamic> decoded = jsonDecode(presetsJson);
-        _presets = decoded.map((item) => PromptPreset.fromJson(item)).toList();
+        _userPresets = decoded
+            .map((item) => PromptPreset.fromJson(item))
+            .toList();
       } catch (e) {
         debugPrint('Error loading presets: $e');
       }
@@ -921,9 +1066,7 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
       await _loadQueue();
 
       _queueItems.removeWhere(
-        (item) =>
-            item.status == QueueItemStatus.completed ||
-            item.status == QueueItemStatus.failed,
+        (item) => item.status == QueueItemStatus.completed,
       );
 
       // Save updated queue (removed items)
@@ -1165,6 +1308,7 @@ class PromptPreset {
   final String queryInstruction;
   final String transcriptionSystem;
   final String transcriptionPrompt;
+  final bool isBuiltIn;
 
   PromptPreset({
     required this.name,
@@ -1172,6 +1316,7 @@ class PromptPreset {
     required this.queryInstruction,
     this.transcriptionSystem = '',
     this.transcriptionPrompt = '',
+    this.isBuiltIn = false,
   });
 
   Map<String, dynamic> toJson() => {
@@ -1180,6 +1325,7 @@ class PromptPreset {
     'queryInstruction': queryInstruction,
     'transcriptionSystem': transcriptionSystem,
     'transcriptionPrompt': transcriptionPrompt,
+    'isBuiltIn': isBuiltIn,
   };
 
   factory PromptPreset.fromJson(Map<String, dynamic> json) {
@@ -1189,6 +1335,7 @@ class PromptPreset {
       queryInstruction: json['queryInstruction'] as String,
       transcriptionSystem: json['transcriptionSystem'] as String? ?? '',
       transcriptionPrompt: json['transcriptionPrompt'] as String? ?? '',
+      isBuiltIn: json['isBuiltIn'] as bool? ?? false,
     );
   }
 }

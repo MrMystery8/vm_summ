@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/processing_state.dart';
 import 'screens/home_screen.dart';
-import 'screens/processing_screen.dart';
-import 'screens/results_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -59,23 +57,11 @@ class _MainNavigatorState extends State<MainNavigator> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ProcessingState>(
-      builder: (context, state, _) {
-        // Auto-navigate based on processing state
-        if (state.isProcessing) {
-          return const ProcessingScreen();
-        }
-
-        if (state.status == ProcessingStatus.complete) {
-          return const ResultsScreen();
-        }
-
-        // Default: show home screen
-        return HomeScreen(
-          onProcessingStart: () {
-            // Navigation is automatic via state changes
-          },
-        );
+    // No auto-navigation based on state.
+    // Navigation should only happen via user interaction (Notification tap or clicking item in Queue/History).
+    return HomeScreen(
+      onProcessingStart: () {
+        // Optional: show a snackbar or small indicator instead of full screen redirect
       },
     );
   }
