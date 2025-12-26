@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../services/summary_storage_service.dart';
-import '../services/gemma_audio_service.dart';
+
 import '../providers/processing_state.dart';
 
 class NoteDetailScreen extends StatefulWidget {

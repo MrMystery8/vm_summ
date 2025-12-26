@@ -106,6 +106,7 @@ class _HomeScreenState extends State<HomeScreen>
       );
 
       if (result != null && result.files.isNotEmpty) {
+        if (!mounted) return;
         final state = context.read<ProcessingState>();
         for (final file in result.files) {
           if (file.path != null) {

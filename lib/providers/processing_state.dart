@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'package:flutter/foundation.dart';
+
 import 'package:flutter/material.dart'; // For MaterialPageRoute
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -979,7 +979,7 @@ Interview subject/topic
       }
 
       // Create/update lock file with our PID
-      await lockFile.writeAsString('${DateTime.now().toIso8601String()}');
+      await lockFile.writeAsString(DateTime.now().toIso8601String());
       debugPrint('Queue: Acquired file lock, starting processing');
 
       // Start foreground service to keep alive

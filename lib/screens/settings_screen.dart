@@ -173,7 +173,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 IconButton(
                   icon: const Icon(Icons.save_outlined),
                   style: IconButton.styleFrom(
-                    backgroundColor: const Color(0xFF00D9FF).withOpacity(0.1),
+                    backgroundColor: const Color(
+                      0xFF00D9FF,
+                    ).withValues(alpha: 0.1),
                     foregroundColor: const Color(0xFF00D9FF),
                   ),
                   tooltip: 'Save as Preset',
