@@ -144,5 +144,5 @@ flutter run --release
 ---
 
 ## 📄 License
-MIT License.
+Apache 2.0 License.
 Built with ❤️ using Flutter & Google Gemma.
