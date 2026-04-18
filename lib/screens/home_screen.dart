@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../providers/processing_state.dart';
+import '../services/audio_converter.dart';
 import '../services/audio_recorder_service.dart';
 import 'package:audio_waveforms/audio_waveforms.dart';
 import 'history_screen.dart';
@@ -101,24 +102,40 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.audio,
+        type: FileType.custom,
+        allowedExtensions: AudioConverter.supportedExtensions
+            .map((ext) => ext.substring(1))
+            .toList(),
         allowMultiple: true, // Allow multiple files
       );
 
       if (result != null && result.files.isNotEmpty) {
         if (!mounted) return;
         final state = context.read<ProcessingState>();
+        var addedCount = 0;
+        var skippedCount = 0;
         for (final file in result.files) {
           if (file.path != null) {
-            state.queueFile(File(file.path!));
+            final queued = state.queueFile(File(file.path!));
+            if (queued != null) {
+              addedCount++;
+            } else {
+              skippedCount++;
+            }
           }
         }
-        widget.onProcessingStart?.call();
+        if (addedCount > 0) {
+          widget.onProcessingStart?.call();
+        }
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Added ${result.files.length} file(s) to queue'),
+              content: Text(
+                skippedCount == 0
+                    ? 'Added $addedCount file(s) to queue'
+                    : 'Added $addedCount file(s); skipped $skippedCount file(s)',
+              ),
               backgroundColor: const Color(0xFF00D9FF),
               duration: const Duration(seconds: 1),
             ),
@@ -278,7 +295,7 @@ class _HomeScreenState extends State<HomeScreen>
                       const SizedBox(height: 12),
 
                       Text(
-                        'Powered by Gemma 3n AI',
+                        'Powered by Gemma 4 E2B',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white.withAlpha(150),
@@ -794,7 +811,7 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Gemma 3n E2B',
+                      'Gemma 4 E2B',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,

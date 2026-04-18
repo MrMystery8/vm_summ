@@ -47,8 +47,7 @@ flutter {
 }
 
 dependencies {
-    // LiteRT-LM for Gemma 3n multimodal (text + vision + audio)
-    // LiteRT-LM for Gemma 3n multimodal
+    // LiteRT-LM runtime for bundled Gemma 4 E2B multimodal inference
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
     
     // OkHttp for model downloading from HuggingFace
@@ -60,4 +59,3 @@ dependencies {
     // Core library desugaring for Flutter Local Notifications
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
-

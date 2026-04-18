@@ -10,7 +10,24 @@ class AudioConverter {
     'com.voicenotesummarizer/audio_converter',
   );
 
+  static const Set<String> supportedExtensions = {
+    '.aac',
+    '.m4a',
+    '.mp3',
+    '.ogg',
+    '.opus',
+    '.wav',
+  };
+
   bool _initialized = false;
+
+  static bool isSupportedInputPath(String path) {
+    final lowerPath = path.toLowerCase();
+    return supportedExtensions.any(lowerPath.endsWith);
+  }
+
+  static String get supportedExtensionsLabel =>
+      supportedExtensions.map((ext) => ext.substring(1).toUpperCase()).join(', ');
 
   /// Initialize the converter
   Future<void> initialize() async {
@@ -27,6 +44,12 @@ class AudioConverter {
     }
 
     final inputPath = inputFile.path;
+    if (!isSupportedInputPath(inputPath)) {
+      throw AudioConversionException(
+        'Unsupported audio format. Supported formats: $supportedExtensionsLabel.',
+      );
+    }
+
     final inputSize = await inputFile.length();
     debugPrint('AudioConverter: Input: $inputPath ($inputSize bytes)');
 
@@ -61,21 +84,27 @@ class AudioConverter {
     } on PlatformException catch (e) {
       debugPrint('AudioConverter: Platform error: ${e.message}');
       debugPrint('AudioConverter: Details: ${e.details}');
-
-      // Fallback: copy file and let Whisper try to handle it
-      debugPrint('AudioConverter: Falling back to direct copy');
-      final ext = inputPath.split('.').last.toLowerCase();
-      final fallbackPath = '${tempDir.path}/converted_fallback_$timestamp.$ext';
-      final fallbackFile = await inputFile.copy(fallbackPath);
-      return fallbackFile;
+      await _deleteIfExists(outputPath);
+      throw AudioConversionException(
+        e.message ??
+            'Audio conversion failed. Use WAV, M4A, MP3, OGG, OPUS, or AAC.',
+      );
     } catch (e) {
       debugPrint('AudioConverter: Error: $e');
+      await _deleteIfExists(outputPath);
+      if (e is AudioConversionException) {
+        rethrow;
+      }
+      throw AudioConversionException(
+        'Audio conversion failed. Use WAV, M4A, MP3, OGG, OPUS, or AAC.',
+      );
+    }
+  }
 
-      // Fallback: copy file
-      final ext = inputPath.split('.').last.toLowerCase();
-      final fallbackPath = '${tempDir.path}/converted_fallback_$timestamp.$ext';
-      final fallbackFile = await inputFile.copy(fallbackPath);
-      return fallbackFile;
+  Future<void> _deleteIfExists(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
     }
   }
 
@@ -98,4 +127,13 @@ class AudioConverter {
       debugPrint('AudioConverter: Cleanup error: $e');
     }
   }
+}
+
+class AudioConversionException implements Exception {
+  final String message;
+
+  AudioConversionException(this.message);
+
+  @override
+  String toString() => message;
 }

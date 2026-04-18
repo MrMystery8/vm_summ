@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:share_plus/share_plus.dart';
 import '../providers/processing_state.dart';
+import '../utils/slider_bounds.dart';
 
 /// Results screen showing summary, transcript, and audio playback
 class ResultsScreen extends StatefulWidget {
@@ -327,11 +328,11 @@ class _ResultsScreenState extends State<ResultsScreen>
               thumbColor: Colors.white,
             ),
             child: Slider(
-              value: _position.inMilliseconds.toDouble(),
-              max: _duration.inMilliseconds.toDouble().clamp(
-                1,
-                double.infinity,
+              value: clampSliderValue(
+                _position.inMilliseconds.toDouble(),
+                sliderMaxFromDuration(_duration),
               ),
+              max: sliderMaxFromDuration(_duration),
               onChanged: (value) {
                 _audioPlayer.seek(Duration(milliseconds: value.toInt()));
               },
@@ -607,7 +608,7 @@ class _ResultsScreenState extends State<ResultsScreen>
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _buildMetadataChip(Icons.memory_rounded, 'Gemma 3n'),
+        _buildMetadataChip(Icons.memory_rounded, 'Gemma 4 E2B'),
         const SizedBox(width: 12),
         _buildMetadataChip(Icons.timer_rounded, _formatDuration(_duration)),
         const SizedBox(width: 12),

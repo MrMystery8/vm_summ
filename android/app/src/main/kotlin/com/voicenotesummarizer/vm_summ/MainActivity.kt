@@ -17,7 +17,7 @@ class MainActivity : FlutterActivity() {
         // Register native audio converter plugin
         flutterEngine.plugins.add(AudioConverterPlugin())
         
-        // Register Gemma 3n multimodal audio plugins
+        // Register bundled Gemma audio plugins
         flutterEngine.plugins.add(GemmaAudioPlugin())
         flutterEngine.plugins.add(GemmaModelManager())
 

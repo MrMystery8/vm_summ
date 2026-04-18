@@ -123,7 +123,7 @@ class QueueItem {
   }
 }
 
-/// Main state provider for voice note processing using Gemma 3n
+/// Main state provider for voice note processing using Gemma 4
 class ProcessingState extends ChangeNotifier {
   final AudioConverter _audioConverter = AudioConverter();
   final GemmaAudioService _gemmaService = GemmaAudioService();
@@ -748,7 +748,7 @@ Interview subject/topic
 
         _updateModelStatus(
           ModelStatus.copying,
-          'Loading Gemma 3n model...',
+          'Loading Gemma 4 E2B model...',
           0.3,
         );
 
@@ -763,7 +763,7 @@ Interview subject/topic
           },
         );
 
-        _updateModelStatus(ModelStatus.ready, 'Gemma 3n ready', 1.0);
+        _updateModelStatus(ModelStatus.ready, 'Gemma 4 E2B ready', 1.0);
 
         // Auto-process any queued files after init
         // We use the file-lock safe method _startProcessingQueue
@@ -808,9 +808,17 @@ Interview subject/topic
     await initialize();
   }
 
-  /// Add a file to the processing queue with deduplication
-  /// Returns the QueueItem if added, or null if it was a duplicate
+  /// Add a file to the processing queue with deduplication and format checks.
+  /// Returns the QueueItem if added, or null if skipped.
   QueueItem? queueFile(File file) {
+    if (!AudioConverter.isSupportedInputPath(file.path)) {
+      _setError(
+        'Unsupported audio format for ${file.path.split('/').last}. '
+        'Supported formats: ${AudioConverter.supportedExtensionsLabel}.',
+      );
+      return null;
+    }
+
     // Deduplication check
     if (_processedFilePaths.contains(file.path)) {
       debugPrint('Queue: Skipping duplicate file ${file.path}');
@@ -1157,12 +1165,13 @@ Interview subject/topic
     queueFile(audioFile);
   }
 
-  /// Internal: Actually process a voice note file through Gemma 3n
+  /// Internal: Actually process a voice note file through Gemma 4
   Future<void> _processVoiceNoteInternal(File audioFile) async {
     _reset();
     _currentAudioPath = audioFile.path;
     notifyListeners();
 
+    File? wavFile;
     try {
       // Step 1: Convert audio to WAV format
       _updateStatus(
@@ -1171,20 +1180,19 @@ Interview subject/topic
         0.2,
       );
 
-      File wavFile;
       try {
         wavFile = await _audioConverter.convertTo16kMonoWav(audioFile);
         debugPrint('Converted audio to: ${wavFile.path}');
       } catch (e) {
         debugPrint('Audio conversion error: $e');
         _setError('Audio conversion failed: $e');
-        return;
+        rethrow;
       }
 
       // Step 2: Process with Gemma (transcription + summarization in one pass)
       _updateStatus(
         ProcessingStatus.processing,
-        'Processing with Gemma 3n...',
+        'Processing with Gemma 4 E2B...',
         0.5,
       );
 
@@ -1211,7 +1219,7 @@ Interview subject/topic
       } catch (e) {
         debugPrint('Gemma processing error: $e');
         _setError('Processing failed: $e');
-        return;
+        rethrow;
       }
 
       // Save to history
@@ -1242,16 +1250,18 @@ Interview subject/topic
 
       // Complete
       _updateStatus(ProcessingStatus.complete, 'Processing complete!', 1.0);
-
-      // Cleanup temp wav file
+    } catch (e) {
+      debugPrint('Processing error: $e');
+      if (_errorMessage == null || _errorMessage!.isEmpty) {
+        _setError('Processing failed: $e');
+      }
+      rethrow;
+    } finally {
       try {
-        if (wavFile.path != audioFile.path) {
+        if (wavFile != null && wavFile.path != audioFile.path) {
           await wavFile.delete();
         }
       } catch (_) {}
-    } catch (e) {
-      debugPrint('Processing error: $e');
-      _setError('Processing failed: $e');
     }
   }
 

@@ -1,6 +1,7 @@
 package com.voicenotesummarizer.vm_summ
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
@@ -21,6 +22,7 @@ object GemmaRuntime {
     
     private val initLock = Mutex()
     @Volatile private var engineDeferred: CompletableDeferred<Engine>? = null
+    @Volatile private var forceCpuOnly = false
     
     // Single thread for ALL engine operations - prevents GPU race conditions
     private val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -49,11 +51,13 @@ object GemmaRuntime {
                 
                 // IMPORTANT: Create engine on the single thread
                 val engine = withContext(dispatcher) {
+                    val useCpuOnly = forceCpuOnly || isEmulator()
+                    Log.d(TAG, "Engine backend mode: ${if (useCpuOnly) "CPU_ONLY" else "GPU_MAIN"}")
                     val config = EngineConfig(
                         modelPath = modelFile.absolutePath,
-                        backend = Backend.GPU,
-                        visionBackend = Backend.GPU,
-                        audioBackend = Backend.CPU,
+                        backend = if (useCpuOnly) Backend.CPU() else Backend.GPU(),
+                        visionBackend = if (useCpuOnly) Backend.CPU() else Backend.GPU(),
+                        audioBackend = Backend.CPU(),
                         maxNumTokens = 2048,
                         cacheDir = context.cacheDir.absolutePath
                     )
@@ -88,5 +92,24 @@ object GemmaRuntime {
             engineDeferred?.cancel()
             engineDeferred = null
         }
+    }
+
+    suspend fun forceCpuFallback() {
+        forceCpuOnly = true
+        reset()
+    }
+
+    fun shouldFallbackToCpu(t: Throwable): Boolean {
+        if (forceCpuOnly) return false
+        val message = t.message?.lowercase() ?: return false
+        return "opencl" in message || "sampler" in message
+    }
+
+    private fun isEmulator(): Boolean {
+        return Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
+            Build.MODEL.contains("emulator", ignoreCase = true) ||
+            Build.HARDWARE.equals("ranchu", ignoreCase = true) ||
+            Build.HARDWARE.equals("goldfish", ignoreCase = true) ||
+            Build.PRODUCT.contains("sdk", ignoreCase = true)
     }
 }

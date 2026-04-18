@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
@@ -24,7 +25,7 @@ import android.os.Handler
 import android.os.Looper
 
 /**
- * Gemma 3n Audio Plugin - Uses single-flight initialization pattern.
+ * Gemma 4 audio plugin - uses single-flight initialization pattern.
  * All init calls wait for the same operation via GemmaRuntime.
  * Model copy is atomic via ModelStore.
  */
@@ -110,10 +111,9 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "initialize" -> initialize(result)
+            "initialize" -> initialize(call, result)
             "transcribe" -> transcribe(call, result)
             "transcribeAndSummarize" -> transcribeAndSummarize(call, result)
-            "generateResponse" -> generateResponse(call, result)
             "generateResponse" -> generateResponse(call, result)
             "chat" -> chat(call, result)
             "chatStream" -> chatStream(call, result)
@@ -128,13 +128,14 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
      * Uses ModelStore for atomic copy, GemmaRuntime for engine creation.
      * All callers wait for the same operation - no concurrent inits.
      */
-    private fun initialize(result: Result) {
+    private fun initialize(call: MethodCall, result: Result) {
         GemmaRuntime.scope.launch {
             try {
                 Log.d(TAG, "Initialize called - using single-flight pattern")
+                val modelPath = call.argument<String>("modelPath")
                 
                 // Step 1: Ensure model is ready (atomic copy)
-                val modelFile = ModelStore.ensureModelReady(context)
+                val modelFile = ModelStore.ensureModelReady(context, modelPath)
                 Log.d(TAG, "Model file ready: ${modelFile.absolutePath}")
                 
                 // Step 2: Get or create engine (single-flight)
@@ -152,7 +153,7 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     }
 
     private fun transcribe(call: MethodCall, result: Result) {
-        val audioPath = call.argument<String>("path")
+        val audioPath = call.argument<String>("path") ?: call.argument<String>("audioPath")
         val transcriptionSystem = call.argument<String>("transcriptionSystem")
         val transcriptionPrompt = call.argument<String>("transcriptionPrompt")
         
@@ -204,7 +205,7 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     }
     
     private fun generateResponse(call: MethodCall, result: Result) {
-        val audioPath = call.argument<String>("path")
+        val audioPath = call.argument<String>("path") ?: call.argument<String>("audioPath")
         val prompt = call.argument<String>("prompt")
         
         if (audioPath == null || prompt == null) {
@@ -277,32 +278,30 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     
     private suspend fun doTranscribe(audioPath: String, systemInstruction: String?, promptInstruction: String?): String {
         val modelFile = ModelStore.ensureModelReady(context)
-        val eng = GemmaRuntime.getEngine(context, modelFile)
         val audioBytes = File(audioPath).also { validateWav(it) }.readBytes()
         
         val sysMsg = systemInstruction ?: TRANSCRIPTION_SYSTEM
         val config = ConversationConfig(
-            systemMessage = Message.of(sysMsg),
+            systemInstruction = Contents.of(sysMsg),
             samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.1)
         )
         
-        val promptText = promptInstruction ?: "Transcribe the audio verbatim.\nIMPORTANT: Do NOT translate. Romanize non-English speech into English letters only.\nOutput ONLY the transcript."
+        val promptText = promptInstruction ?: "Transcribe the audio verbatim from this audio clip. Preserve speaker wording, keep mixed-language code switching, romanize non-English speech into English letters only, and output only the transcript."
         
         val message = Message.of(listOf(
             Content.AudioBytes(audioBytes),
             Content.Text(promptText)
         ))
         
-        return runInference(eng, config, message)
+        return withEngineRetry(modelFile) { eng -> runInference(eng, config, message) }
     }
     
     private suspend fun doSummarize(transcript: String, systemInstruction: String?, queryInstruction: String?): Map<String, Any?> {
         val modelFile = ModelStore.ensureModelReady(context)
-        val eng = GemmaRuntime.getEngine(context, modelFile)
         
         val sysMsg = systemInstruction ?: SUMMARIZATION_SYSTEM
         val config = ConversationConfig(
-            systemMessage = Message.of(sysMsg),
+            systemInstruction = Contents.of(sysMsg),
             samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.3)
         )
         
@@ -320,7 +319,9 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
 
         val userPromptPrefix = queryInstruction ?: "Analyze the following transcript and provide the summary, title, key points, and action items as requested:"
         val prompt = "$userPromptPrefix\n\n<TRANSCRIPT>\n$transcript\n</TRANSCRIPT>"
-        val response = runInference(eng, config, Message.of(prompt))
+        val response = withEngineRetry(modelFile) { eng ->
+            runInference(eng, config, Message.of(prompt))
+        }
         
         Log.d(TAG, "Summary response: ${response.take(200)}...")
         return parseAnalysis(response)
@@ -328,7 +329,6 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     
     private suspend fun runAudioInference(audioPath: String, prompt: String): String {
         val modelFile = ModelStore.ensureModelReady(context)
-        val eng = GemmaRuntime.getEngine(context, modelFile)
         val audioBytes = File(audioPath).also { validateWav(it) }.readBytes()
         
         val config = ConversationConfig(
@@ -340,12 +340,11 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             Content.Text(prompt)
         ))
         
-        return runInference(eng, config, message)
+        return withEngineRetry(modelFile) { eng -> runInference(eng, config, message) }
     }
 
     private suspend fun runTextInference(transcript: String, userPrompt: String): String {
         val modelFile = ModelStore.ensureModelReady(context)
-        val eng = GemmaRuntime.getEngine(context, modelFile)
         
         val config = ConversationConfig(
             samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.7) // Higher temp for creative chat
@@ -355,7 +354,7 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         
         val message = Message.of(fullPrompt)
         
-        return runInference(eng, config, message)
+        return withEngineRetry(modelFile) { eng -> runInference(eng, config, message) }
     }
     
     private suspend fun runInference(engine: Engine, config: ConversationConfig, message: Message): String = 
@@ -382,7 +381,6 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         
     private suspend fun runTextInferenceStream(transcript: String, userPrompt: String) {
         val modelFile = ModelStore.ensureModelReady(context)
-        val eng = GemmaRuntime.getEngine(context, modelFile)
         
         val config = ConversationConfig(
             samplerConfig = SamplerConfig(topK = 40, topP = 0.9, temperature = 0.7)
@@ -391,7 +389,22 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         val fullPrompt = "Context (Transcript):\n$transcript\n\nUser Question: $userPrompt"
         val message = Message.of(fullPrompt)
         
-        runInferenceStream(eng, config, message)
+        withEngineRetry(modelFile) { eng ->
+            runInferenceStream(eng, config, message)
+        }
+    }
+
+    private suspend fun <T> withEngineRetry(modelFile: File, block: suspend (Engine) -> T): T {
+        try {
+            return block(GemmaRuntime.getEngine(context, modelFile))
+        } catch (e: Exception) {
+            if (!GemmaRuntime.shouldFallbackToCpu(e)) {
+                throw e
+            }
+            Log.w(TAG, "Inference failed with GPU backend, retrying on CPU", e)
+            GemmaRuntime.forceCpuFallback()
+            return block(GemmaRuntime.getEngine(context, modelFile))
+        }
     }
 
     private suspend fun runInferenceStream(engine: Engine, config: ConversationConfig, message: Message) = 

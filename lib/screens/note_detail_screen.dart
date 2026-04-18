@@ -6,6 +6,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../services/summary_storage_service.dart';
 
 import '../providers/processing_state.dart';
+import '../utils/slider_bounds.dart';
 
 class NoteDetailScreen extends StatefulWidget {
   final SummaryRecord record;
@@ -256,12 +257,15 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                           ),
                         ),
                         child: Slider(
-                          value: _position.inSeconds.toDouble(),
-                          max: _duration.inSeconds.toDouble() > 0
-                              ? _duration.inSeconds.toDouble()
-                              : 1.0,
+                          value: clampSliderValue(
+                            _position.inMilliseconds.toDouble(),
+                            sliderMaxFromDuration(_duration),
+                          ),
+                          max: sliderMaxFromDuration(_duration),
                           onChanged: (value) {
-                            _audioPlayer.seek(Duration(seconds: value.toInt()));
+                            _audioPlayer.seek(
+                              Duration(milliseconds: value.toInt()),
+                            );
                           },
                         ),
                       ),

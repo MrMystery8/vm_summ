@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:share_handler/share_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'audio_converter.dart';
 
 /// Handles receiving shared files from other apps (e.g., WhatsApp)
 ///
@@ -49,13 +50,7 @@ class ShareHandlerService {
 
   /// Check if file is an audio file we can process
   bool _isAudioFile(String path) {
-    final lowercasePath = path.toLowerCase();
-    return lowercasePath.endsWith('.ogg') ||
-        lowercasePath.endsWith('.opus') ||
-        lowercasePath.endsWith('.m4a') ||
-        lowercasePath.endsWith('.mp3') ||
-        lowercasePath.endsWith('.wav') ||
-        lowercasePath.endsWith('.aac');
+    return AudioConverter.isSupportedInputPath(path);
   }
 
   /// Save shared file to documents directory

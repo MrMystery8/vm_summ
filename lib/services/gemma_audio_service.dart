@@ -3,7 +3,11 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Result from Gemma 3n audio processing.
+const String kBundledGemmaAssetName = 'gemma-4-E2B-it.litertlm';
+const String kBundledGemmaModelName = 'gemma-4-E2B.litertlm';
+const String kBundledGemmaDisplayName = 'Gemma 4 E2B';
+
+/// Result from Gemma 4 audio processing.
 class GemmaAudioResult {
   /// Raw response from the model
   final String response;
@@ -132,7 +136,7 @@ class GemmaModelInfo {
   }
 }
 
-/// Service for Gemma 3n multimodal audio inference.
+/// Service for Gemma 4 multimodal audio inference.
 ///
 /// Provides:
 /// - Model downloading and management
@@ -192,7 +196,7 @@ class GemmaAudioService {
 
     try {
       final result = await _modelChannel.invokeMethod('isModelDownloaded', {
-        'modelName': modelName ?? 'gemma-3n-E2B.litertlm',
+        'modelName': modelName ?? kBundledGemmaModelName,
       });
       return (result as Map)['downloaded'] as bool? ?? false;
     } on PlatformException catch (e) {
@@ -209,7 +213,7 @@ class GemmaAudioService {
 
     try {
       final result = await _modelChannel.invokeMethod('getModelPath', {
-        'modelName': modelName ?? 'gemma-3n-E2B.litertlm',
+        'modelName': modelName ?? kBundledGemmaModelName,
       });
       return result as String;
     } on PlatformException catch (e) {
@@ -241,8 +245,8 @@ class GemmaAudioService {
     try {
       debugPrint('GemmaAudioService: Copying bundled model from assets...');
       final result = await _modelChannel.invokeMethod('copyBundledModel', {
-        'assetName': 'gemma-3n-E2B-it-int4.litertlm',
-        'destName': 'gemma-3n-E2B.litertlm',
+        'assetName': kBundledGemmaAssetName,
+        'destName': kBundledGemmaModelName,
       });
 
       final map = result as Map;
@@ -266,7 +270,7 @@ class GemmaAudioService {
 
   /// Download a Gemma model from HuggingFace.
   ///
-  /// [modelName] - The model filename (e.g., 'gemma-3n-E2B.task')
+  /// [modelName] - The model filename (e.g., 'gemma-4-E2B.litertlm')
   /// [hfToken] - Optional HuggingFace token for authenticated downloads
   /// [onProgress] - Callback for download progress updates
   Future<String> downloadModel({
@@ -292,7 +296,7 @@ class GemmaAudioService {
 
     try {
       final result = await _modelChannel.invokeMethod('downloadModel', {
-        'modelName': modelName ?? 'gemma-3n-E2B.litertlm',
+        'modelName': modelName ?? kBundledGemmaModelName,
         if (hfToken != null) 'hfToken': hfToken,
       });
 
@@ -316,7 +320,7 @@ class GemmaAudioService {
 
     try {
       final result = await _modelChannel.invokeMethod('deleteModel', {
-        'modelName': modelName ?? 'gemma-3n-E2B.litertlm',
+        'modelName': modelName ?? kBundledGemmaModelName,
       });
       return (result as Map)['deleted'] as bool? ?? false;
     } on PlatformException catch (e) {
@@ -329,7 +333,7 @@ class GemmaAudioService {
   // Inference
   // ============================================================
 
-  /// Initialize the Gemma 3n model for inference.
+  /// Initialize the bundled Gemma 4 model for inference.
   ///
   /// [modelPath] - Path to the .task model file
   Future<void> initialize(String modelPath) async {
@@ -371,7 +375,7 @@ class GemmaAudioService {
       return;
     }
 
-    const modelName = 'gemma-3n-E2B.litertlm';
+    const modelName = kBundledGemmaModelName;
 
     // Check if already copied
     final downloaded = await isModelDownloaded(modelName: modelName);

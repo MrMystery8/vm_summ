@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:share_plus/share_plus.dart';
 import '../services/summary_storage_service.dart';
+import '../utils/slider_bounds.dart';
 
 /// Results screen showing summary, transcript, and audio playback
 /// Adapted from ResultsScreen to work with SummaryRecord (for history/notifications)
@@ -325,11 +326,11 @@ class _SummaryResultScreenState extends State<SummaryResultScreen>
               thumbColor: Colors.white,
             ),
             child: Slider(
-              value: _position.inMilliseconds.toDouble(),
-              max: _duration.inMilliseconds.toDouble().clamp(
-                1,
-                double.infinity,
+              value: clampSliderValue(
+                _position.inMilliseconds.toDouble(),
+                sliderMaxFromDuration(_duration),
               ),
+              max: sliderMaxFromDuration(_duration),
               onChanged: (value) {
                 _audioPlayer.seek(Duration(milliseconds: value.toInt()));
               },

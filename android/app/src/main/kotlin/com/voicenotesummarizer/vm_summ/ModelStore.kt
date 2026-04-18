@@ -13,7 +13,6 @@ import java.io.File
  */
 object ModelStore {
     private const val TAG = "ModelStore"
-    private const val MODEL_ASSET = "gemma-3n-E2B-it-int4.litertlm"
     
     private val lock = Mutex()
     @Volatile private var ready: CompletableDeferred<File>? = null
@@ -22,7 +21,7 @@ object ModelStore {
      * Ensures model is ready - atomic copy with tmp file rename.
      * Multiple callers will wait for the same copy operation.
      */
-    suspend fun ensureModelReady(context: Context): File {
+    suspend fun ensureModelReady(context: Context, explicitPath: String? = null): File {
         // Fast path - already ready
         ready?.let { return it.await() }
         
@@ -35,7 +34,7 @@ object ModelStore {
         
         if (isLeader) {
             try {
-                val finalFile = File(context.filesDir, MODEL_ASSET)
+                val finalFile = explicitPath?.let(::File) ?: GemmaModelConfig.defaultModelFile(context)
                 
                 Log.d(TAG, "Checking model: ${finalFile.absolutePath}")
                 
@@ -53,7 +52,7 @@ object ModelStore {
                     if (tmpFile.exists()) tmpFile.delete()
                     
                     // Copy to tmp file
-                    context.assets.open(MODEL_ASSET).use { input ->
+                    context.assets.open(GemmaModelConfig.BUNDLED_ASSET).use { input ->
                         tmpFile.outputStream().use { output ->
                             val buffer = ByteArray(1024 * 1024) // 1MB buffer
                             var totalCopied = 0L

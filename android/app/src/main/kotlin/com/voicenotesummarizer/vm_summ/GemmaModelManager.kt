@@ -16,7 +16,7 @@ import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Manages Gemma 3n model downloading and caching.
+ * Manages Gemma 4 model packaging and caching.
  * 
  * Downloads models from HuggingFace and caches them locally.
  * Supports progress reporting via EventChannel.
@@ -38,13 +38,6 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         const val METHOD_CHANNEL = "com.voicenotesummarizer/gemma_model_manager"
         const val EVENT_CHANNEL = "com.voicenotesummarizer/gemma_model_manager/progress"
         private const val TAG = "GemmaModelManager"
-        
-        // Bundled model filename (in android/app/src/main/assets/)
-        const val GEMMA_3N_E2B_ASSET = "gemma-3n-E2B-it-int4.litertlm"
-        
-        // Model file names for local storage
-        const val GEMMA_3N_E2B_FILENAME = "gemma-3n-E2B.litertlm"
-        const val GEMMA_3N_E4B_FILENAME = "gemma-3n-E4B.litertlm"
     }
     
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -92,8 +85,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * Returns the path even if the model isn't downloaded yet.
      */
     private fun getModelPath(call: MethodCall, result: Result) {
-        val modelName = call.argument<String>("modelName") ?: GEMMA_3N_E2B_FILENAME
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelPath = File(modelsDir, modelName).absolutePath
         result.success(modelPath)
     }
@@ -102,8 +95,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * Check if a model is already downloaded.
      */
     private fun isModelDownloaded(call: MethodCall, result: Result) {
-        val modelName = call.argument<String>("modelName") ?: GEMMA_3N_E2B_FILENAME
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelFile = File(modelsDir, modelName)
         
         val exists = modelFile.exists() && modelFile.length() > 0
@@ -118,8 +111,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * Get the size of a downloaded model.
      */
     private fun getModelSize(call: MethodCall, result: Result) {
-        val modelName = call.argument<String>("modelName") ?: GEMMA_3N_E2B_FILENAME
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelFile = File(modelsDir, modelName)
         
         if (modelFile.exists()) {
@@ -133,16 +126,16 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * Get list of available models with their download status.
      */
     private fun getAvailableModels(result: Result) {
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         
         val models = listOf(
             mapOf(
-                "name" to "Gemma 3n E2B",
-                "filename" to GEMMA_3N_E2B_FILENAME,
-                "bundledAsset" to GEMMA_3N_E2B_ASSET,
-                "downloaded" to File(modelsDir, GEMMA_3N_E2B_FILENAME).exists(),
-                "description" to "Effective 2B parameter model with audio support",
-                "estimatedSize" to "~3.4GB"
+                "name" to GemmaModelConfig.DISPLAY_NAME,
+                "filename" to GemmaModelConfig.LOCAL_FILENAME,
+                "bundledAsset" to GemmaModelConfig.BUNDLED_ASSET,
+                "downloaded" to File(modelsDir, GemmaModelConfig.LOCAL_FILENAME).exists(),
+                "description" to GemmaModelConfig.DESCRIPTION,
+                "estimatedSize" to GemmaModelConfig.ESTIMATED_SIZE
             )
         )
         
@@ -154,10 +147,10 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * This is the primary method since the model is bundled in the APK.
      */
     private fun copyBundledModel(call: MethodCall, result: Result) {
-        val assetName = call.argument<String>("assetName") ?: GEMMA_3N_E2B_ASSET
-        val destName = call.argument<String>("destName") ?: GEMMA_3N_E2B_FILENAME
+        val assetName = call.argument<String>("assetName") ?: GemmaModelConfig.BUNDLED_ASSET
+        val destName = call.argument<String>("destName") ?: GemmaModelConfig.LOCAL_FILENAME
         
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         modelsDir.mkdirs()
         val destFile = File(modelsDir, destName)
         
@@ -251,7 +244,7 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * - hfToken: String? - HuggingFace token for authenticated downloads
      */
     private fun downloadModel(call: MethodCall, result: Result) {
-        val modelName = call.argument<String>("modelName") ?: GEMMA_3N_E2B_FILENAME
+        val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
         val url = call.argument<String>("url")
         val hfToken = call.argument<String>("hfToken")
         
@@ -264,7 +257,7 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
             return
         }
         
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         modelsDir.mkdirs()
         val modelFile = File(modelsDir, modelName)
         
@@ -369,8 +362,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
      * Delete a downloaded model.
      */
     private fun deleteModel(call: MethodCall, result: Result) {
-        val modelName = call.argument<String>("modelName") ?: GEMMA_3N_E2B_FILENAME
-        val modelsDir = File(context.filesDir, "gemma_models")
+        val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
+        val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelFile = File(modelsDir, modelName)
         
         if (modelFile.exists()) {

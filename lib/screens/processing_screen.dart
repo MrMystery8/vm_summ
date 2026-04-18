@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../providers/processing_state.dart';
 import 'queue_screen.dart';
+import '../utils/slider_bounds.dart';
 
 /// Enhanced processing screen with audio player and model status
 class ProcessingScreen extends StatefulWidget {
@@ -190,7 +191,7 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Gemma 3n Model',
+                      'Gemma 4 E2B Model',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -302,11 +303,11 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
             ),
             child: Slider(
-              value: _position.inMilliseconds.toDouble(),
-              max: _duration.inMilliseconds.toDouble().clamp(
-                1,
-                double.infinity,
+              value: clampSliderValue(
+                _position.inMilliseconds.toDouble(),
+                sliderMaxFromDuration(_duration),
               ),
+              max: sliderMaxFromDuration(_duration),
               activeColor: const Color(0xFF00D9FF),
               inactiveColor: Colors.white.withAlpha(30),
               onChanged: (value) {

@@ -2,13 +2,13 @@
 
 **Offline, Private, On-Device AI Summary & Transcription**
 
-**Voice Note Summarizer** is a Flutter application that uses Google's **Gemma 3n (2B)** multimodal model directly on your Android device to transcribe and summarize voice notes. It operates completely offline, ensuring 100% privacy with zero data transfer to the cloud.
+**Voice Note Summarizer** is a Flutter application that uses Google's **Gemma 4 E2B** multimodal model directly on your Android device to transcribe and summarize voice notes. It operates completely offline, ensuring 100% privacy with zero data transfer to the cloud.
 
 ---
 
 ## 🚀 Key Features
 
-*   **100% On-Device Inference:** Uses `LiteRT` (TensorFlow Lite) to run Gemma 3n locally. No API keys, no cloud costs, no privacy risks.
+*   **100% On-Device Inference:** Uses `LiteRT-LM` to run Gemma 4 E2B locally. No API keys, no cloud costs, no privacy risks.
 *   **Multimodal Processing:** Processes raw audio directly (speech-to-text + summarization in one pass) without intermediate text-to-speech steps.
 *   **Robust Queue System:** 
     *   **Serialized Processing:** Prevents app crashes by processing files one-by-one.
@@ -51,12 +51,11 @@ Handles the heavy lifting: AI model loading and inference.
     *   Receives configuration (System Prompts, Transcription Rules) from Flutter.
     *   Standardizes markdown output (TITLE, SUMMARY, KEY POINTS) for easy parsing.
 *   **`GemmaRuntime.kt`**:
-    *   Singleton that manages the `LiteRT` (TensorFlow Lite) Engine.
-    *   Uses `LLMInference` API from Google MediaPipe/GenAI.
+    *   Singleton that manages the `LiteRT-LM` engine.
     *   Implements **Single-Flight Initialization** to prevent multiple threads from loading the model simultaneously.
 *   **`ModelStore.kt`**:
     *   Manages the physical model file (`.litertlm`).
-    *   Handles **Atomic Copying** of the 2GB model from Assets -> internal storage on first run.
+    *   Handles **Atomic Copying** of the bundled 2.58GB model from APK assets -> internal storage on first run.
 
 ---
 
@@ -98,12 +97,12 @@ Handles the heavy lifting: AI model loading and inference.
 *   **Physical Device**: 8GB+ RAM Recommended (Samsung S23/S24, Pixel 7/8/9). **Emulator will likely fail or be extremely slow.**
 
 ### 1. Model Setup
-This app requires the **Gemma 3n 2B** model converted for LiteRT.
-1.  Download `gemma-3n-2b-it-gpu-int4.bin` (or `.task`/`.litertlm` equivalent).
-2.  Rename it to: `gemma-3n-E2B-it-int4.litertlm`
-3.  Place it in: `android/app/src/main/assets/`
+This app bundles the **Gemma 4 E2B** LiteRT-LM artifact in the APK.
+1.  Download `gemma-4-E2B-it.litertlm` from [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm).
+2.  Verify the SHA256 is `ab7838cdfc8f77e54d8ca45eadceb20452d9f01e4bfade03e5dce27911b27e42`.
+3.  Place it in: `android/app/src/main/assets/gemma-4-E2B-it.litertlm`
 
-*(Note: The model is ~1.8GB and is excluded from git)*
+*(Note: The bundled model is ~2.58GB and is intentionally packaged with the app.)*
 
 ### 2. Build & Run
 **CRITICAL:** You must run in **Release Mode**. Debug mode adds overhead that makes the AI too slow to function.
@@ -137,9 +136,9 @@ flutter run --release
 
 ## 🔧 Troubleshooting
 
-*   **App Crash on First Run:** The app needs 2-3 minutes on the *very first launch* to copy the 2GB model. Do not kill the app.
+*   **App Crash on First Run:** The app needs time on the *very first launch* to copy the bundled 2.58GB model into internal storage. Do not kill the app.
 *   **Processing Stuck:** Force close the app. The queue system handles "Orphaned Locks" and will mark stuck items as "Failed" on next launch so you can retry.
-*   **"TF_LITE_ERROR":** Ensure you are using the correct `.litertlm` model file and running on a device with NPU/GPU support.
+*   **"TF_LITE_ERROR":** Ensure `android/app/src/main/assets/gemma-4-E2B-it.litertlm` is the bundled model and run on a device with GPU/NPU support.
 
 ---
 
