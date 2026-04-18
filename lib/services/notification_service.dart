@@ -13,6 +13,8 @@ class NotificationService {
 
   bool _isInitialized = false;
 
+  static const int _processingNotificationId = 1001;
+
   Future<void> initialize({
     required void Function(NotificationResponse)?
     onDidReceiveNotificationResponse,
@@ -73,6 +75,7 @@ class NotificationService {
   Future<void> showCompletionNotification({
     required String title,
     required String body,
+    int notificationId = _processingNotificationId,
     String? payload, // Can be ID or Path to navigate to
   }) async {
     const AndroidNotificationDetails androidNotificationDetails =
@@ -90,7 +93,7 @@ class NotificationService {
     );
 
     await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond, // unique id
+      notificationId,
       title,
       body,
       notificationDetails,
@@ -98,9 +101,38 @@ class NotificationService {
     );
   }
 
+  Future<void> showProcessingNotification({
+    required String title,
+    required String body,
+  }) async {
+    const AndroidNotificationDetails androidNotificationDetails =
+        AndroidNotificationDetails(
+          'voice_note_processing',
+          'Voice Note Processing',
+          channelDescription: 'Notifications for voice note processing status',
+          importance: Importance.low,
+          priority: Priority.low,
+          ongoing: true,
+          autoCancel: false,
+          onlyAlertOnce: true,
+        );
+
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidNotificationDetails,
+    );
+
+    await flutterLocalNotificationsPlugin.show(
+      _processingNotificationId,
+      title,
+      body,
+      notificationDetails,
+    );
+  }
+
   Future<void> showErrorNotification({
     required String title,
     required String body,
+    int notificationId = _processingNotificationId,
   }) async {
     const AndroidNotificationDetails androidNotificationDetails =
         AndroidNotificationDetails(
@@ -116,7 +148,7 @@ class NotificationService {
     );
 
     await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecond,
+      notificationId,
       title,
       body,
       notificationDetails,

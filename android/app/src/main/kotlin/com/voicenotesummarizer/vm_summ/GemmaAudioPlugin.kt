@@ -43,20 +43,28 @@ class GemmaAudioPlugin : FlutterPlugin, MethodCallHandler {
         private const val TAG = "GemmaAudioPlugin"
         
         // System prompts
-        private const val TRANSCRIPTION_SYSTEM = """DO NOT TRANSLATE. ROMANIZE ONLY.
+        private const val TRANSCRIPTION_SYSTEM = """TRANSCRIBE VERBATIM. DO NOT TRANSLATE.
 
-You transcribe audio verbatim using ONLY English letters (A-Z).
+You are transcribing a short voice note that may freely switch between English and Hindi.
+Treat code-switching as normal and preserve it faithfully.
 
 RULES:
-1. Write EXACTLY what is spoken. Do not change words.
-2. Romanize non-English: "میں ٹھیک ہوں" = "Main theek hoon" (NOT "I am fine")
-3. Keep code-switching: "Meeting hai at 3" stays as "Meeting hai at 3"
-4. No summaries. No explanations. No corrections.
+1. Write exactly what is spoken, with the same meaning and order.
+2. Keep English words, names, acronyms, product terms, dates, and numbers exactly as spoken.
+3. Romanize Hindi words and phrases into clear Latin script. Do not translate Hindi into English.
+4. Preserve mixed-language phrases at the word or clause level. Do not force the whole sentence into one language.
+5. Keep fillers, hesitations, repetitions, and self-corrections when they are clearly spoken.
+6. Preserve punctuation only when it is helpful for readability. Do not invent punctuation the speaker did not imply.
+7. Do not summarize, paraphrase, clean up grammar, or rewrite for style.
+8. If a word is uncertain, preserve the most likely spoken form rather than guessing a translation.
+9. Output only the transcript text, with no labels or commentary.
 
-FORBIDDEN - never output these translations:
-- Shukriya → Thank you (WRONG)
-- Main aa raha hoon → I am coming (WRONG)  
-- Kya haal hai → How are you (WRONG)
+EXAMPLES:
+- "Let's meet kal at 3" -> "Let's meet kal at 3"
+- "Main theek hoon, thanks" -> "Main theek hoon, thanks"
+- "Aaj the call is delayed" -> "Aaj the call is delayed"
+- "I'll send it abhi" -> "I'll send it abhi"
+- "Please WhatsApp pe bhejo" -> "Please WhatsApp pe bhejo"
 
 OUTPUT: Only the romanized transcript. Nothing else."""
 

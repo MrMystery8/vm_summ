@@ -130,6 +130,7 @@ class ProcessingState extends ChangeNotifier {
   final SummaryStorageService _storageService = SummaryStorageService();
   final NotificationService _notificationService = NotificationService();
   final ShareHandlerService _shareHandlerService = ShareHandlerService();
+  Future<void>? _notificationReady;
 
   // Polling timer for queue syncing
   Timer? _queuePollTimer;
@@ -195,25 +196,33 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
   static const String defaultQueryInstruction = "Analyze this transcript:";
 
   static const String defaultTranscriptionSystem =
-      """DO NOT TRANSLATE. ROMANIZE ONLY.
+      """TRANSCRIBE VERBATIM. DO NOT TRANSLATE.
 
-You transcribe audio verbatim using ONLY English letters (A-Z).
+You are transcribing a short voice note that may freely switch between English and Hindi.
+Treat code-switching as normal and preserve it faithfully.
 
 RULES:
-1. Write EXACTLY what is spoken. Do not change words.
-2. Romanize non-English: "میں ٹھیک ہوں" = "Main theek hoon" (NOT "I am fine")
-3. Keep code-switching: "Meeting hai at 3" stays as "Meeting hai at 3"
-4. No summaries. No explanations. No corrections.
+1. Write exactly what is spoken, with the same meaning and order.
+2. Keep English words, names, acronyms, product terms, dates, and numbers exactly as spoken.
+3. Romanize Hindi words and phrases into clear Latin script. Do not translate Hindi into English.
+4. Preserve mixed-language phrases at the word or clause level. Do not force the whole sentence into one language.
+5. Keep fillers, hesitations, repetitions, and self-corrections when they are clearly spoken.
+6. Preserve punctuation only when it is helpful for readability. Do not invent punctuation the speaker did not imply.
+7. Do not summarize, paraphrase, clean up grammar, or rewrite for style.
+8. If a word is uncertain, preserve the most likely spoken form rather than guessing a translation.
+9. Output only the transcript text, with no labels or commentary.
 
-FORBIDDEN - never output these translations:
-- Shukriya → Thank you (WRONG)
-- Main aa raha hoon → I am coming (WRONG)
-- Kya haal hai → How are you (WRONG)
+EXAMPLES:
+- "Let's meet kal at 3" -> "Let's meet kal at 3"
+- "Main theek hoon, thanks" -> "Main theek hoon, thanks"
+- "Aaj the call is delayed" -> "Aaj the call is delayed"
+- "I'll send it abhi" -> "I'll send it abhi"
+- "Please WhatsApp pe bhejo" -> "Please WhatsApp pe bhejo"
 
 OUTPUT: Only the romanized transcript. Nothing else.""";
 
   static const String defaultTranscriptionPrompt =
-      "Transcribe the audio exactly as spoken.";
+      "Transcribe the audio exactly as spoken, preserving English-Hindi code switching and romanizing Hindi words without translating them.";
 
   // Prompt Settings
   String _systemInstruction = defaultSystemInstruction;
@@ -624,7 +633,7 @@ Interview subject/topic
 
     // Initialize notifications (foreground service init first)
     _initForegroundTask();
-    _notificationService.initialize(
+    _notificationReady = _notificationService.initialize(
       onDidReceiveNotificationResponse: (details) async {
         if (details.payload != null) {
           final summaryId = details.payload!;
@@ -735,6 +744,12 @@ Interview subject/topic
 
     while (retryCount < maxRetries) {
       try {
+        await (_notificationReady ?? Future.value());
+        await _notificationService.showProcessingNotification(
+          title: 'Preparing Voice Notes',
+          body: 'Loading Gemma 4 E2B model...',
+        );
+
         _updateModelStatus(
           ModelStatus.copying,
           retryCount > 0
@@ -992,6 +1007,11 @@ Interview subject/topic
 
       // Start foreground service to keep alive
       await _startForegroundService();
+      await _notificationReady;
+      await _notificationService.showProcessingNotification(
+        title: 'Processing Voice Notes',
+        body: 'Gemma 4 is processing your shared audio...',
+      );
 
       // Now start the async processing
       await _processQueueInternal();
@@ -1045,6 +1065,11 @@ Interview subject/topic
       _currentItem!.status = QueueItemStatus.processing;
       _currentProcessingStartTime = DateTime.now();
       debugPrint('Queue: Processing ${_currentItem!.fileName}');
+      await _notificationReady;
+      await _notificationService.showProcessingNotification(
+        title: 'Processing Voice Notes',
+        body: 'Processing ${_currentItem!.fileName}...',
+      );
       notifyListeners();
 
       // CRITICAL: Save 'Processing' status to disk immediately
@@ -1123,12 +1148,14 @@ Interview subject/topic
         _notificationService.showCompletionNotification(
           title: title,
           body: body,
+          notificationId: 1001,
           payload: payload ?? _currentItem!.id,
         );
       } else if (_currentItem!.status == QueueItemStatus.failed) {
         _notificationService.showErrorNotification(
           title: 'Processing Failed',
           body: 'Failed to process ${_currentItem!.fileName}',
+          notificationId: 1001,
         );
       }
 
