@@ -11,12 +11,23 @@ void main() {
 }
 
 class VoiceNoteSummarizerApp extends StatelessWidget {
-  const VoiceNoteSummarizerApp({super.key});
+  final bool enableBackgroundServices;
+  final bool enableNotifications;
+
+  const VoiceNoteSummarizerApp({
+    super.key,
+    this.enableBackgroundServices = true,
+    this.enableNotifications = true,
+  });
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (_) => ProcessingState(),
+      create: (_) =>
+          ProcessingState(
+            enableBackgroundServices: enableBackgroundServices,
+            enableNotifications: enableNotifications,
+          ),
       child: MaterialApp(
         navigatorKey: navigatorKey,
         title: 'Voice Note Summarizer',

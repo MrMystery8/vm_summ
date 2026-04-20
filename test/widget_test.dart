@@ -13,7 +13,12 @@ import 'package:vm_summ/main.dart';
 void main() {
   testWidgets('App loads without crashing', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const VoiceNoteSummarizerApp());
+    await tester.pumpWidget(
+      const VoiceNoteSummarizerApp(
+        enableBackgroundServices: false,
+        enableNotifications: false,
+      ),
+    );
 
     // Verify that the app loads
     expect(find.byType(MaterialApp), findsOneWidget);

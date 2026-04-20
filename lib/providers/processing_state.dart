@@ -125,12 +125,17 @@ class QueueItem {
 
 /// Main state provider for voice note processing using Gemma 4
 class ProcessingState extends ChangeNotifier {
-  final AudioConverter _audioConverter = AudioConverter();
-  final GemmaAudioService _gemmaService = GemmaAudioService();
-  final SummaryStorageService _storageService = SummaryStorageService();
-  final NotificationService _notificationService = NotificationService();
-  final ShareHandlerService _shareHandlerService = ShareHandlerService();
+  final AudioConverter _audioConverter;
+  final GemmaAudioService _gemmaService;
+  final SummaryStorageService _storageService;
+  final NotificationService _notificationService;
+  final ShareHandlerService _shareHandlerService;
+  final bool _enableBackgroundServices;
+  final bool _enableNotifications;
+  late final Future<void> _startupFuture;
   Future<void>? _notificationReady;
+  Future<void> _queuePersistenceChain = Future.value();
+  bool _startupCompleted = false;
 
   // Polling timer for queue syncing
   Timer? _queuePollTimer;
@@ -159,7 +164,6 @@ class ProcessingState extends ChangeNotifier {
 
   // Deduplication - track recently processed files
   final Set<String> _processedFilePaths = {};
-  static const int _maxProcessedPathsCache = 100;
 
   // File-based lock for cross-instance synchronization
   static const String _lockFileName = 'processing.lock';
@@ -479,6 +483,51 @@ Interview subject/topic
     notifyListeners();
   }
 
+  Future<void> _bootstrapStartup() async {
+    try {
+      await _loadSettings();
+      await _loadQueue();
+      await _clearOrphanedLock();
+
+      if (_enableBackgroundServices) {
+        try {
+          await _initShareHandler();
+        } catch (e) {
+          debugPrint('Queue: Share handler init error: $e');
+        }
+        _startPolling();
+
+        if (_enableNotifications) {
+          _initForegroundTask();
+          _notificationReady = _notificationService.initialize(
+            onDidReceiveNotificationResponse: (details) async {
+              if (details.payload != null) {
+                final summaryId = details.payload!;
+                debugPrint('Notification tapped with payload: $summaryId');
+
+                // Find the summary record
+                final record = await _storageService.getRecord(summaryId);
+                if (record != null && navigatorKey.currentState != null) {
+                  navigatorKey.currentState!.push(
+                    MaterialPageRoute(
+                      builder: (_) => SummaryResultScreen(record: record),
+                    ),
+                  );
+                }
+              }
+            },
+          );
+        } else {
+          _notificationReady = Future.value();
+        }
+      }
+    } catch (e) {
+      debugPrint('Queue: Startup error: $e');
+    } finally {
+      _startupCompleted = true;
+    }
+  }
+
   // Initialize Foreground Service
   Future<void> _initForegroundTask() async {
     FlutterForegroundTask.init(
@@ -527,6 +576,16 @@ Interview subject/topic
   bool get hasQueuedFiles => _queueItems.isNotEmpty;
   QueueItem? get currentItem => _currentItem;
 
+  @visibleForTesting
+  Future<void> get startupReady => _startupFuture;
+
+  @visibleForTesting
+  Set<String> get processedFilePathsDebug =>
+      Set.unmodifiable(_processedFilePaths);
+
+  @visibleForTesting
+  Future<void> get queuePersistenceIdle => _queuePersistenceChain;
+
   /// Estimate total time for all queued items
   Duration get totalQueueEstimate {
     if (_queueItems.isEmpty) return Duration.zero;
@@ -551,17 +610,19 @@ Interview subject/topic
         final content = await file.readAsString();
         final List<dynamic> json = jsonDecode(content);
         final loadedItems = json.map((e) => QueueItem.fromJson(e)).toList();
+        final activeLoadedItems = loadedItems
+            .where((item) => item.status != QueueItemStatus.completed)
+            .toList();
 
         // 1. Add new items
-        for (var item in loadedItems) {
+        for (var item in activeLoadedItems) {
           if (!_queueItems.any((existing) => existing.id == item.id)) {
             _queueItems.add(item);
-            _processedFilePaths.add(item.file.path);
           }
         }
 
         // 2. Update existing items (status, error message)
-        for (var loadedItem in loadedItems) {
+        for (var loadedItem in activeLoadedItems) {
           final existingIndex = _queueItems.indexWhere(
             (e) => e.id == loadedItem.id,
           );
@@ -587,7 +648,8 @@ Interview subject/topic
         // but extra safety: don't remove current item)
         _queueItems.removeWhere((existing) {
           if (_currentItem?.id == existing.id) return false;
-          final isInDisk = loadedItems.any(
+          if (!_startupCompleted) return false;
+          final isInDisk = activeLoadedItems.any(
             (loaded) => loaded.id == existing.id,
           );
           return !isInDisk;
@@ -595,10 +657,11 @@ Interview subject/topic
 
         // Sort by addedAt
         _queueItems.sort((a, b) => a.addedAt.compareTo(b.addedAt));
+        _syncProcessedFilePaths();
 
         notifyListeners();
         debugPrint(
-          'Queue: Synced (Merged/Updated) ${loadedItems.length} items from disk',
+          'Queue: Synced (Merged/Updated) ${activeLoadedItems.length} items from disk',
         );
       }
     } catch (e) {
@@ -610,57 +673,67 @@ Interview subject/topic
   Future<void> _saveQueue() async {
     try {
       final file = await _queueFile;
-      // Only save pending/processing items (not completed/failed as they are removed anyway)
       final itemsToSave = _queueItems.toList();
-
+      final tempFile = File(
+        '${file.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+      );
       final json = jsonEncode(itemsToSave.map((e) => e.toJson()).toList());
-      await file.writeAsString(json);
+      await tempFile.writeAsString(json);
+      if (await file.exists()) {
+        await file.delete();
+      }
+      await tempFile.rename(file.path);
       debugPrint('Queue: Saved ${itemsToSave.length} items to disk');
     } catch (e) {
       debugPrint('Queue: Error saving queue: $e');
     }
   }
 
-  ProcessingState() {
-    // Load queue on startup
-    _loadQueue();
+  Future<void> _enqueueQueuePersistence() {
+    _queuePersistenceChain = _queuePersistenceChain.then((_) => _saveQueue());
+    return _queuePersistenceChain;
+  }
 
-    // Clear any orphaned lock file from previous process
-    _clearOrphanedLock();
+  void _persistQueueMutation() {
+    if (_startupCompleted) {
+      unawaited(_enqueueQueuePersistence());
+      return;
+    }
 
-    // Start polling for updates from other instances
-    _startPolling();
-
-    // Initialize notifications (foreground service init first)
-    _initForegroundTask();
-    _notificationReady = _notificationService.initialize(
-      onDidReceiveNotificationResponse: (details) async {
-        if (details.payload != null) {
-          final summaryId = details.payload!;
-          debugPrint('Notification tapped with payload: $summaryId');
-
-          // Find the summary record
-          final record = await _storageService.getRecord(summaryId);
-          if (record != null && navigatorKey.currentState != null) {
-            navigatorKey.currentState!.push(
-              MaterialPageRoute(
-                builder: (_) => SummaryResultScreen(record: record),
-              ),
-            );
-          }
-        }
-      },
+    unawaited(
+      _startupFuture.then((_) {
+        _enqueueQueuePersistence();
+      }),
     );
+  }
 
-    // Initialize share handler (last)
-    _initShareHandler();
+  void _syncProcessedFilePaths() {
+    _processedFilePaths
+      ..clear()
+      ..addAll(_queueItems.map((item) => item.file.path));
+  }
 
-    // Load persisted settings
-    _loadSettings();
+  ProcessingState({
+    AudioConverter? audioConverter,
+    GemmaAudioService? gemmaService,
+    SummaryStorageService? storageService,
+    NotificationService? notificationService,
+    ShareHandlerService? shareHandlerService,
+    bool enableBackgroundServices = true,
+    bool enableNotifications = true,
+  }) : _audioConverter = audioConverter ?? AudioConverter(),
+       _gemmaService = gemmaService ?? GemmaAudioService(),
+       _storageService = storageService ?? SummaryStorageService(),
+       _notificationService = notificationService ?? NotificationService(),
+       _shareHandlerService = shareHandlerService ?? ShareHandlerService(),
+       _enableBackgroundServices = enableBackgroundServices,
+       _enableNotifications = enableNotifications {
+    _startupFuture = _bootstrapStartup();
   }
 
   // Initialize and listen to share handler
   Future<void> _initShareHandler() async {
+    if (!_enableBackgroundServices) return;
     _shareHandlerService.onFileReceived = (File file) {
       debugPrint('ShareHandler: Received file ${file.path}');
       queueFile(file);
@@ -669,6 +742,7 @@ Interview subject/topic
   }
 
   void _startPolling() {
+    if (!_enableBackgroundServices) return;
     _queuePollTimer?.cancel();
     _queuePollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       // Only poll if we are NOT the active processor
@@ -718,13 +792,15 @@ Interview subject/topic
       _status != ProcessingStatus.complete &&
       _status != ProcessingStatus.error;
 
+  bool get enableBackgroundServices => _enableBackgroundServices;
+  bool get enableNotifications => _enableNotifications;
+
   // Guard against multiple initializations
   bool _isInitializing = false;
 
   /// Initialize Gemma model (copy from bundled assets)
   Future<void> initialize() async {
-    // Reload queue before init to get latest state
-    await _loadQueue();
+    await _startupFuture;
 
     // Prevent multiple concurrent init calls
     if (_isInitializing) {
@@ -744,11 +820,13 @@ Interview subject/topic
 
     while (retryCount < maxRetries) {
       try {
-        await (_notificationReady ?? Future.value());
-        await _notificationService.showProcessingNotification(
-          title: 'Preparing Voice Notes',
-          body: 'Loading Gemma 4 E2B model...',
-        );
+        if (_enableBackgroundServices) {
+          await (_notificationReady ?? Future.value());
+          await _notificationService.showProcessingNotification(
+            title: 'Preparing Voice Notes',
+            body: 'Loading Gemma 4 E2B model...',
+          );
+        }
 
         _updateModelStatus(
           ModelStatus.copying,
@@ -782,7 +860,9 @@ Interview subject/topic
 
         // Auto-process any queued files after init
         // We use the file-lock safe method _startProcessingQueue
-        if (_queueItems.isNotEmpty) {
+        if (_queueItems.any(
+          (item) => item.status == QueueItemStatus.pending,
+        )) {
           debugPrint(
             'Model ready - processing ${_queueItems.length} queued files',
           );
@@ -853,15 +933,10 @@ Interview subject/topic
     );
 
     _queueItems.add(item);
-    _processedFilePaths.add(file.path);
-
-    // Limit dedup cache size
-    if (_processedFilePaths.length > _maxProcessedPathsCache) {
-      _processedFilePaths.remove(_processedFilePaths.first);
-    }
+    _syncProcessedFilePaths();
 
     // Save to disk
-    _saveQueue();
+    _persistQueueMutation();
 
     debugPrint(
       'Queue: Added ${item.fileName} (${_queueItems.length} in queue)',
@@ -871,7 +946,15 @@ Interview subject/topic
     // Start processing if model ready and not already processing
     // Use Future.microtask to avoid recursive/nested calls that cause race conditions
     if (_modelStatus == ModelStatus.ready && !_isProcessingQueue) {
-      Future.microtask(() => _startProcessingQueue());
+      unawaited(
+        _startupFuture.then((_) {
+          if (_modelStatus == ModelStatus.ready &&
+              !_isProcessingQueue &&
+              _queueItems.any((item) => item.status == QueueItemStatus.pending)) {
+            _startProcessingQueue();
+          }
+        }),
+      );
     }
 
     return item;
@@ -889,10 +972,11 @@ Interview subject/topic
     if (index == -1) return false;
 
     _queueItems.removeAt(index);
+    _syncProcessedFilePaths();
     debugPrint('Queue: Removed item $id');
 
     // Save to disk
-    _saveQueue();
+    _persistQueueMutation();
 
     notifyListeners();
     return true;
@@ -909,9 +993,10 @@ Interview subject/topic
     final item = _queueItems.removeAt(oldIndex);
     final adjustedNewIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
     _queueItems.insert(adjustedNewIndex, item);
+    _syncProcessedFilePaths();
 
     // Save to disk
-    _saveQueue();
+    _persistQueueMutation();
 
     notifyListeners();
   }
@@ -923,9 +1008,10 @@ Interview subject/topic
       if (_currentItem != null && item.id == _currentItem!.id) return false;
       return true;
     });
+    _syncProcessedFilePaths();
 
     // Save to disk
-    _saveQueue();
+    _persistQueueMutation();
 
     notifyListeners();
   }
@@ -1005,13 +1091,15 @@ Interview subject/topic
       await lockFile.writeAsString(DateTime.now().toIso8601String());
       debugPrint('Queue: Acquired file lock, starting processing');
 
-      // Start foreground service to keep alive
-      await _startForegroundService();
-      await _notificationReady;
-      await _notificationService.showProcessingNotification(
-        title: 'Processing Voice Notes',
-        body: 'Gemma 4 is processing your shared audio...',
-      );
+      if (_enableBackgroundServices) {
+        // Start foreground service to keep alive
+        await _startForegroundService();
+        await (_notificationReady ?? Future.value());
+        await _notificationService.showProcessingNotification(
+          title: 'Processing Voice Notes',
+          body: 'Gemma 4 is processing your shared audio...',
+        );
+      }
 
       // Now start the async processing
       await _processQueueInternal();
@@ -1042,6 +1130,7 @@ Interview subject/topic
 
   /// Public method to trigger queue processing
   Future<void> processQueue() async {
+    await _startupFuture;
     _startProcessingQueue();
   }
 
@@ -1065,11 +1154,13 @@ Interview subject/topic
       _currentItem!.status = QueueItemStatus.processing;
       _currentProcessingStartTime = DateTime.now();
       debugPrint('Queue: Processing ${_currentItem!.fileName}');
-      await _notificationReady;
-      await _notificationService.showProcessingNotification(
-        title: 'Processing Voice Notes',
-        body: 'Processing ${_currentItem!.fileName}...',
-      );
+      if (_enableBackgroundServices) {
+        await (_notificationReady ?? Future.value());
+        await _notificationService.showProcessingNotification(
+          title: 'Processing Voice Notes',
+          body: 'Processing ${_currentItem!.fileName}...',
+        );
+      }
       notifyListeners();
 
       // CRITICAL: Save 'Processing' status to disk immediately
@@ -1104,6 +1195,7 @@ Interview subject/topic
       _queueItems.removeWhere(
         (item) => item.status == QueueItemStatus.completed,
       );
+      _syncProcessedFilePaths();
 
       // Save updated queue (removed items)
       await _saveQueue();
@@ -1145,18 +1237,22 @@ Interview subject/topic
           debugPrint('Queue: Error finding record for notification: $e');
         }
 
-        _notificationService.showCompletionNotification(
-          title: title,
-          body: body,
-          notificationId: 1001,
-          payload: payload ?? _currentItem!.id,
-        );
+        if (_enableBackgroundServices) {
+          _notificationService.showCompletionNotification(
+            title: title,
+            body: body,
+            notificationId: 1001,
+            payload: payload ?? _currentItem!.id,
+          );
+        }
       } else if (_currentItem!.status == QueueItemStatus.failed) {
-        _notificationService.showErrorNotification(
-          title: 'Processing Failed',
-          body: 'Failed to process ${_currentItem!.fileName}',
-          notificationId: 1001,
-        );
+        if (_enableBackgroundServices) {
+          _notificationService.showErrorNotification(
+            title: 'Processing Failed',
+            body: 'Failed to process ${_currentItem!.fileName}',
+            notificationId: 1001,
+          );
+        }
       }
 
       _currentItem = null;
@@ -1178,7 +1274,9 @@ Interview subject/topic
     await _releaseFileLock();
 
     // Stop foreground service
-    await _stopForegroundService();
+    if (_enableBackgroundServices) {
+      await _stopForegroundService();
+    }
 
     debugPrint('Queue: All items processed');
     notifyListeners();

@@ -80,18 +80,20 @@ class _HomeScreenState extends State<HomeScreen>
     if (mounted) {
       final state = context.read<ProcessingState>();
 
-      // Initialize Notification Service
-      await NotificationService().initialize(
-        onDidReceiveNotificationResponse: (NotificationResponse response) {
-          // Handle notification tap - Navigate to History
-          if (response.payload != null && mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const HistoryScreen()),
-            );
-          }
-        },
-      );
+      if (state.enableNotifications) {
+        // Initialize Notification Service
+        await NotificationService().initialize(
+          onDidReceiveNotificationResponse: (NotificationResponse response) {
+            // Handle notification tap - Navigate to History
+            if (response.payload != null && mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const HistoryScreen()),
+              );
+            }
+          },
+        );
+      }
 
       if (state.modelStatus != ModelStatus.ready) {
         await state.initialize();
