@@ -1,17 +1,22 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:share_handler/share_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vm_summ/providers/processing_state.dart';
 import 'package:vm_summ/services/audio_converter.dart';
 import 'package:vm_summ/services/gemma_audio_service.dart';
+import 'package:vm_summ/services/notification_service.dart';
 import 'package:vm_summ/services/share_handler_service.dart';
 import 'package:vm_summ/services/summary_storage_service.dart';
 
-const MethodChannel _pathProviderChannel =
-    MethodChannel('plugins.flutter.io/path_provider');
+const MethodChannel _pathProviderChannel = MethodChannel(
+  'plugins.flutter.io/path_provider',
+);
 
 class FakeAudioConverter extends AudioConverter {
   @override
@@ -103,6 +108,59 @@ class FakeSummaryStorageService extends SummaryStorageService {
   }
 }
 
+class RecordingNotificationService extends NotificationService {
+  final String? launchPayload;
+  final List<Map<String, Object?>> completionNotifications = [];
+  final List<Map<String, Object?>> processingNotifications = [];
+  final List<Map<String, Object?>> errorNotifications = [];
+
+  RecordingNotificationService({this.launchPayload}) : super.test();
+
+  @override
+  Future<void> initialize({
+    required void Function(NotificationResponse)? onDidReceiveNotificationResponse,
+  }) async {}
+
+  @override
+  String? get launchNotificationPayload => launchPayload;
+
+  @override
+  Future<void> showCompletionNotification({
+    required String title,
+    required String body,
+    int notificationId = 1001,
+    String? payload,
+  }) async {
+    completionNotifications.add({
+      'title': title,
+      'body': body,
+      'notificationId': notificationId,
+      'payload': payload,
+    });
+  }
+
+  @override
+  Future<void> showProcessingNotification({
+    required String title,
+    required String body,
+  }) async {
+    processingNotifications.add({'title': title, 'body': body});
+  }
+
+  @override
+  Future<void> showErrorNotification({
+    required String title,
+    required String body,
+    int notificationId = 1001,
+  }) async {
+    errorNotifications.add({
+      'title': title,
+      'body': body,
+      'notificationId': notificationId,
+    });
+  }
+}
+
 class ThrowingShareHandlerService extends ShareHandlerService {
   @override
   Future<void> initialize() async {
@@ -110,16 +168,42 @@ class ThrowingShareHandlerService extends ShareHandlerService {
   }
 }
 
+class EmittingShareHandlerService extends ShareHandlerService {
+  final File fileToEmit;
+  bool _emitted = false;
+
+  EmittingShareHandlerService(this.fileToEmit);
+
+  @override
+  Future<void> initialize() async {
+    if (_emitted) return;
+    _emitted = true;
+    onFileReceived?.call(fileToEmit);
+  }
+}
+
+class SlowAudioConverter extends FakeAudioConverter {
+  final Duration delay;
+
+  SlowAudioConverter(this.delay);
+
+  @override
+  Future<File> convertTo16kMonoWav(File inputFile) async {
+    await Future<void>.delayed(delay);
+    return inputFile;
+  }
+}
+
 Future<void> _setDocumentsDir(Directory dir) async {
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
       .setMockMethodCallHandler(_pathProviderChannel, (call) async {
-    switch (call.method) {
-      case 'getApplicationDocumentsDirectory':
-        return dir.path;
-      default:
-        return null;
-    }
-  });
+        switch (call.method) {
+          case 'getApplicationDocumentsDirectory':
+            return dir.path;
+          default:
+            return null;
+        }
+      });
 }
 
 Future<void> _waitForQueueToDrain(ProcessingState state) async {
@@ -129,6 +213,18 @@ Future<void> _waitForQueueToDrain(ProcessingState state) async {
     await Future<void>.delayed(const Duration(milliseconds: 20));
   }
   fail('Queue did not drain in time');
+}
+
+Future<void> _waitForCondition(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+  fail('Condition was not satisfied in time');
 }
 
 void main() {
@@ -167,15 +263,19 @@ void main() {
         status: QueueItemStatus.processing,
       );
       await queueFile.writeAsString(jsonEncode([staleItem.toJson()]));
-      await File('${docsDir.path}/processing.lock')
-          .writeAsString(DateTime.now().toIso8601String());
+      await File(
+        '${docsDir.path}/processing.lock',
+      ).writeAsString(DateTime.now().toIso8601String());
 
       final state = ProcessingState(enableBackgroundServices: false);
       await state.startupReady;
 
       expect(state.queueItems, hasLength(1));
       expect(state.queueItems.single.status, QueueItemStatus.failed);
-      expect(state.queueItems.single.errorMessage, 'Interrupted by app restart');
+      expect(
+        state.queueItems.single.errorMessage,
+        'Interrupted by app restart',
+      );
       expect(state.processedFilePathsDebug, contains(audioFile.path));
     },
   );
@@ -266,9 +366,9 @@ void main() {
         fileSizeBytes: await existingFile.length(),
         addedAt: DateTime.now(),
       );
-      await File('${tempDir.path}/queue.json').writeAsString(
-        jsonEncode([existingItem.toJson()]),
-      );
+      await File(
+        '${tempDir.path}/queue.json',
+      ).writeAsString(jsonEncode([existingItem.toJson()]));
 
       final state = ProcessingState(enableBackgroundServices: false);
       final newFile = File('${tempDir.path}/new.ogg');
@@ -288,15 +388,166 @@ void main() {
     },
   );
 
-  test('startup still completes when share handler initialization fails', () async {
+  test(
+    'startup still completes when share handler initialization fails',
+    () async {
+      final state = ProcessingState(
+        shareHandlerService: ThrowingShareHandlerService(),
+        enableBackgroundServices: true,
+        enableNotifications: false,
+      );
+
+      await state.startupReady;
+
+      expect(state.processedFilePathsDebug, isEmpty);
+    },
+  );
+
+  test(
+    'cold-start shared audio is queued and processed after model init',
+    () async {
+      final sharedAudio = File('${tempDir.path}/cold_start.ogg');
+      await sharedAudio.writeAsString('audio');
+
+      final state = ProcessingState(
+        audioConverter: SlowAudioConverter(const Duration(milliseconds: 500)),
+        gemmaService: FakeGemmaAudioService(),
+        storageService: FakeSummaryStorageService(),
+        shareHandlerService: EmittingShareHandlerService(sharedAudio),
+        enableBackgroundServices: true,
+        enableNotifications: false,
+      );
+
+      await state.startupReady;
+      expect(state.queueCount, 1);
+      expect(state.currentItem, isNull);
+      expect(state.queueItems.single.status, QueueItemStatus.pending);
+
+      final initFuture = state.initialize();
+      await _waitForCondition(() => state.currentItem != null);
+
+      expect(state.queueCount, 1);
+      expect(state.displayQueueItems, hasLength(1));
+      expect(state.displayQueueItems.single.id, state.currentItem!.id);
+
+      await initFuture;
+      await _waitForQueueToDrain(state);
+
+      expect(state.queueCount, 0);
+      expect(state.currentItem, isNull);
+      expect(state.summaryResult, isNotNull);
+    },
+  );
+
+  test(
+    'completion notification payload uses the saved summary record id',
+    () async {
+      final storage = FakeSummaryStorageService();
+      final notificationService = RecordingNotificationService();
+
+      final state = ProcessingState(
+        audioConverter: SlowAudioConverter(const Duration(milliseconds: 250)),
+        gemmaService: FakeGemmaAudioService(),
+        storageService: storage,
+        notificationService: notificationService,
+        enableBackgroundServices: true,
+        enableNotifications: true,
+      );
+
+      final audioFile = File('${tempDir.path}/payload.ogg');
+      await audioFile.writeAsString('audio');
+
+      expect(state.queueFile(audioFile), isNotNull);
+      await state.initialize();
+      await _waitForQueueToDrain(state);
+
+      expect(notificationService.completionNotifications, hasLength(1));
+      final completion = notificationService.completionNotifications.single;
+      expect(completion['payload'], isNotNull);
+      expect(completion['payload'], isNot('payload.ogg'));
+
+      final records = await storage.getAllRecords();
+      expect(records, hasLength(1));
+      expect(completion['payload'], records.single.id);
+    },
+  );
+
+  test(
+    'startup stores a launch notification payload for later navigation',
+    () async {
+      final storage = FakeSummaryStorageService();
+      final savedRecord = await storage.saveRecord(
+        sourceFileName: 'Launch payload',
+        sourceFilePath: '/tmp/launch.ogg',
+        transcript: 'transcript',
+        summary: 'summary',
+        keyPoints: const ['Point one'],
+        actionItems: 'None',
+      );
+
+      final notificationService = RecordingNotificationService(
+        launchPayload: savedRecord.id,
+      );
+
+      final state = ProcessingState(
+        storageService: storage,
+        notificationService: notificationService,
+        enableBackgroundServices: true,
+        enableNotifications: true,
+      );
+
+      await state.startupReady;
+
+      expect(state.consumePendingSummaryNotificationPayload(), savedRecord.id);
+      expect(await state.resolveSummaryRecord(savedRecord.id), isNotNull);
+    },
+  );
+
+  test('queue display exposes the processing item only once', () async {
     final state = ProcessingState(
-      shareHandlerService: ThrowingShareHandlerService(),
-      enableBackgroundServices: true,
+      audioConverter: SlowAudioConverter(const Duration(milliseconds: 500)),
+      gemmaService: FakeGemmaAudioService(),
+      storageService: FakeSummaryStorageService(),
+      enableBackgroundServices: false,
       enableNotifications: false,
     );
 
-    await state.startupReady;
+    final audioFile = File('${tempDir.path}/visible.ogg');
+    await audioFile.writeAsString('audio');
 
-    expect(state.processedFilePathsDebug, isEmpty);
+    expect(state.queueFile(audioFile), isNotNull);
+    final initFuture = state.initialize();
+
+    await _waitForCondition(() => state.currentItem != null);
+
+    expect(state.queueCount, 1);
+    expect(state.displayQueueItems, hasLength(1));
+    expect(state.displayQueueItems.single.id, state.currentItem!.id);
+    expect(
+      state.displayQueueItems.map((item) => item.id).toSet(),
+      hasLength(state.displayQueueItems.length),
+    );
+
+    await initFuture;
+    await _waitForQueueToDrain(state);
+  });
+
+  test('shared audio attachment helper prefers audio type over extension', () {
+    final audioAttachment = SharedAttachment(
+      path: '/tmp/voice-message',
+      type: SharedAttachmentType.audio,
+    );
+    final fallbackAttachment = SharedAttachment(
+      path: '/tmp/voice-message.ogg',
+      type: SharedAttachmentType.file,
+    );
+    final rejectedAttachment = SharedAttachment(
+      path: '/tmp/voice-message.txt',
+      type: SharedAttachmentType.file,
+    );
+
+    expect(assessSharedAudioAttachment(audioAttachment).accepted, isTrue);
+    expect(assessSharedAudioAttachment(fallbackAttachment).accepted, isTrue);
+    expect(assessSharedAudioAttachment(rejectedAttachment).accepted, isFalse);
   });
 }

@@ -11,8 +11,6 @@ import 'package:audio_waveforms/audio_waveforms.dart';
 import 'history_screen.dart';
 import 'queue_screen.dart';
 import 'settings_screen.dart';
-import '../services/notification_service.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 /// Home screen with modern gradient design
 class HomeScreen extends StatefulWidget {
@@ -79,21 +77,6 @@ class _HomeScreenState extends State<HomeScreen>
     // Initialize model in background
     if (mounted) {
       final state = context.read<ProcessingState>();
-
-      if (state.enableNotifications) {
-        // Initialize Notification Service
-        await NotificationService().initialize(
-          onDidReceiveNotificationResponse: (NotificationResponse response) {
-            // Handle notification tap - Navigate to History
-            if (response.payload != null && mounted) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const HistoryScreen()),
-              );
-            }
-          },
-        );
-      }
 
       if (state.modelStatus != ModelStatus.ready) {
         await state.initialize();
@@ -367,7 +350,7 @@ class _HomeScreenState extends State<HomeScreen>
                                             shape: BoxShape.circle,
                                           ),
                                           child: Text(
-                                            '${state.queueCount + (state.currentItem != null ? 1 : 0)}',
+                                            '${state.queueCount}',
                                             style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 10,
@@ -930,7 +913,7 @@ class _QueueStatusCard extends StatelessWidget {
                     state.status == ProcessingStatus.processing
                         ? 'Processing...'
                         : state.queueItems.isNotEmpty
-                        ? 'Queue (${state.queueItems.length})'
+                        ? 'Queue (${state.queueCount})'
                         : 'Ready',
                     style: const TextStyle(
                       color: Colors.white,
@@ -976,18 +959,18 @@ class _QueueStatusCard extends StatelessWidget {
               ],
 
               // Queue list
-              if (state.queueItems.isNotEmpty) ...[
+              if (state.pendingQueueItems.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 const Divider(color: Color(0xFF2A2A3E), height: 1),
                 const SizedBox(height: 8),
-                ...state.queueItems
+                ...state.pendingQueueItems
                     .take(3)
                     .map((item) => _buildQueueItem(context, item)),
-                if (state.queueItems.length > 3)
+                if (state.pendingQueueItems.length > 3)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
-                      '+${state.queueItems.length - 3} more',
+                      '+${state.pendingQueueItems.length - 3} more',
                       style: TextStyle(
                         color: Colors.white.withAlpha(80),
                         fontSize: 11,

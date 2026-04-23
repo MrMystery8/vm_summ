@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/material.dart'; // For MaterialPageRoute
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,7 @@ import '../services/summary_storage_service.dart';
 import '../services/notification_service.dart';
 import '../main.dart'; // For navigatorKey
 import '../services/share_handler_service.dart';
+import '../screens/history_screen.dart';
 import '../screens/summary_result_screen.dart';
 
 // Callback for foreground service init
@@ -136,6 +138,7 @@ class ProcessingState extends ChangeNotifier {
   Future<void>? _notificationReady;
   Future<void> _queuePersistenceChain = Future.value();
   bool _startupCompleted = false;
+  String? _pendingSummaryNotificationPayload;
 
   // Polling timer for queue syncing
   Timer? _queuePollTimer;
@@ -498,24 +501,19 @@ Interview subject/topic
         _startPolling();
 
         if (_enableNotifications) {
-          _initForegroundTask();
+          await _initForegroundTask();
           _notificationReady = _notificationService.initialize(
-            onDidReceiveNotificationResponse: (details) async {
-              if (details.payload != null) {
-                final summaryId = details.payload!;
-                debugPrint('Notification tapped with payload: $summaryId');
-
-                // Find the summary record
-                final record = await _storageService.getRecord(summaryId);
-                if (record != null && navigatorKey.currentState != null) {
-                  navigatorKey.currentState!.push(
-                    MaterialPageRoute(
-                      builder: (_) => SummaryResultScreen(record: record),
-                    ),
-                  );
-                }
-              }
+            onDidReceiveNotificationResponse:
+                (NotificationResponse details) async {
+              debugPrint(
+                'Queue: Notification tapped with payload: ${details.payload}',
+              );
+              await _handleNotificationPayload(details.payload);
             },
+          );
+          await _notificationReady;
+          await _handleNotificationPayload(
+            _notificationService.launchNotificationPayload,
           );
         } else {
           _notificationReady = Future.value();
@@ -530,51 +528,84 @@ Interview subject/topic
 
   // Initialize Foreground Service
   Future<void> _initForegroundTask() async {
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'voice_note_processing',
-        channelName: 'Voice Note Processing',
-        channelDescription: 'Processing voice notes in background',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-      ),
-      iosNotificationOptions: const IOSNotificationOptions(
-        showNotification: true,
-        playSound: false,
-      ),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 5000,
-        isOnceEvent: false,
-        autoRunOnBoot: false,
-        allowWakeLock: true,
-        allowWifiLock: true,
-      ),
-    );
+    try {
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'voice_note_processing',
+          channelName: 'Voice Note Processing',
+          channelDescription: 'Processing voice notes in background',
+          channelImportance: NotificationChannelImportance.LOW,
+          priority: NotificationPriority.LOW,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: true,
+          playSound: false,
+        ),
+        foregroundTaskOptions: const ForegroundTaskOptions(
+          interval: 5000,
+          isOnceEvent: false,
+          autoRunOnBoot: false,
+          allowWakeLock: true,
+          allowWifiLock: true,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Queue: Foreground task init unavailable: $e');
+    }
   }
 
   /// Start foreground service to keep app alive
   Future<void> _startForegroundService() async {
-    if (await FlutterForegroundTask.isRunningService) return;
+    try {
+      if (await FlutterForegroundTask.isRunningService) return;
 
-    await FlutterForegroundTask.startService(
-      notificationTitle: 'Processing Voice Notes',
-      notificationText: 'Please wait...',
-      callback: startCallback,
-    );
+      await FlutterForegroundTask.startService(
+        notificationTitle: 'Processing Voice Notes',
+        notificationText: 'Please wait...',
+        callback: startCallback,
+      );
+    } catch (e) {
+      debugPrint('Queue: Foreground service unavailable: $e');
+    }
   }
 
   /// Stop foreground service
   Future<void> _stopForegroundService() async {
-    if (await FlutterForegroundTask.isRunningService) {
-      await FlutterForegroundTask.stopService();
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.stopService();
+      }
+    } catch (e) {
+      debugPrint('Queue: Foreground service stop unavailable: $e');
     }
   }
 
   // Queue getters for UI
   List<QueueItem> get queueItems => List.unmodifiable(_queueItems);
   int get queueCount => _queueItems.length;
+  int get pendingQueueCount => _queueItems
+      .where((item) => item.status == QueueItemStatus.pending)
+      .length;
   bool get hasQueuedFiles => _queueItems.isNotEmpty;
   QueueItem? get currentItem => _currentItem;
+  List<QueueItem> get displayQueueItems {
+    if (_currentItem == null) {
+      return List.unmodifiable(_queueItems);
+    }
+
+    final currentId = _currentItem!.id;
+    final visibleItems = <QueueItem>[
+      _currentItem!,
+      ..._queueItems.where((item) => item.id != currentId),
+    ];
+    return List.unmodifiable(visibleItems);
+  }
+
+  List<QueueItem> get pendingQueueItems => List.unmodifiable(
+    _queueItems
+        .where((item) => item.status == QueueItemStatus.pending)
+        .toList(),
+  );
 
   @visibleForTesting
   Future<void> get startupReady => _startupFuture;
@@ -585,6 +616,20 @@ Interview subject/topic
 
   @visibleForTesting
   Future<void> get queuePersistenceIdle => _queuePersistenceChain;
+
+  String? consumePendingSummaryNotificationPayload() {
+    final payload = _pendingSummaryNotificationPayload;
+    _pendingSummaryNotificationPayload = null;
+    return payload;
+  }
+
+  void restorePendingSummaryNotificationPayload(String payload) {
+    _pendingSummaryNotificationPayload = payload;
+  }
+
+  Future<SummaryRecord?> resolveSummaryRecord(String id) {
+    return _storageService.getRecord(id);
+  }
 
   /// Estimate total time for all queued items
   Duration get totalQueueEstimate {
@@ -660,6 +705,7 @@ Interview subject/topic
         _syncProcessedFilePaths();
 
         notifyListeners();
+        _maybeStartProcessingQueue();
         debugPrint(
           'Queue: Synced (Merged/Updated) ${activeLoadedItems.length} items from disk',
         );
@@ -713,6 +759,17 @@ Interview subject/topic
       ..addAll(_queueItems.map((item) => item.file.path));
   }
 
+  void _maybeStartProcessingQueue() {
+    if (!_startupCompleted) return;
+    if (_isProcessingQueue) return;
+    if (_modelStatus != ModelStatus.ready) return;
+    if (!_queueItems.any((item) => item.status == QueueItemStatus.pending)) {
+      return;
+    }
+
+    _startProcessingQueue();
+  }
+
   ProcessingState({
     AudioConverter? audioConverter,
     GemmaAudioService? gemmaService,
@@ -751,6 +808,32 @@ Interview subject/topic
         _loadQueue();
       }
     });
+  }
+
+  Future<void> _handleNotificationPayload(String? payload) async {
+    if (payload == null || payload.isEmpty) return;
+
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) {
+      _pendingSummaryNotificationPayload = payload;
+      debugPrint('Queue: Stored notification payload for later: $payload');
+      return;
+    }
+
+    final record = await resolveSummaryRecord(payload);
+    if (record != null) {
+      navigator.push(
+        MaterialPageRoute(
+          builder: (_) => SummaryResultScreen(record: record),
+        ),
+      );
+      return;
+    }
+
+    debugPrint('Queue: Notification payload $payload did not resolve');
+    navigator.push(
+      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+    );
   }
 
   // Getters
@@ -820,7 +903,7 @@ Interview subject/topic
 
     while (retryCount < maxRetries) {
       try {
-        if (_enableBackgroundServices) {
+        if (_enableBackgroundServices && _enableNotifications) {
           await (_notificationReady ?? Future.value());
           await _notificationService.showProcessingNotification(
             title: 'Preparing Voice Notes',
@@ -859,15 +942,7 @@ Interview subject/topic
         _updateModelStatus(ModelStatus.ready, 'Gemma 4 E2B ready', 1.0);
 
         // Auto-process any queued files after init
-        // We use the file-lock safe method _startProcessingQueue
-        if (_queueItems.any(
-          (item) => item.status == QueueItemStatus.pending,
-        )) {
-          debugPrint(
-            'Model ready - processing ${_queueItems.length} queued files',
-          );
-          _startProcessingQueue();
-        }
+        _maybeStartProcessingQueue();
 
         _isInitializing = false;
         return; // Success - exit
@@ -944,18 +1019,7 @@ Interview subject/topic
     notifyListeners();
 
     // Start processing if model ready and not already processing
-    // Use Future.microtask to avoid recursive/nested calls that cause race conditions
-    if (_modelStatus == ModelStatus.ready && !_isProcessingQueue) {
-      unawaited(
-        _startupFuture.then((_) {
-          if (_modelStatus == ModelStatus.ready &&
-              !_isProcessingQueue &&
-              _queueItems.any((item) => item.status == QueueItemStatus.pending)) {
-            _startProcessingQueue();
-          }
-        }),
-      );
-    }
+    _maybeStartProcessingQueue();
 
     return item;
   }
@@ -979,6 +1043,7 @@ Interview subject/topic
     _persistQueueMutation();
 
     notifyListeners();
+    _maybeStartProcessingQueue();
     return true;
   }
 
@@ -999,6 +1064,7 @@ Interview subject/topic
     _persistQueueMutation();
 
     notifyListeners();
+    _maybeStartProcessingQueue();
   }
 
   /// Clear all items from queue (except currently processing one)
@@ -1014,6 +1080,7 @@ Interview subject/topic
     _persistQueueMutation();
 
     notifyListeners();
+    _maybeStartProcessingQueue();
   }
 
   /// Clear orphan lock on startup
@@ -1094,11 +1161,13 @@ Interview subject/topic
       if (_enableBackgroundServices) {
         // Start foreground service to keep alive
         await _startForegroundService();
-        await (_notificationReady ?? Future.value());
-        await _notificationService.showProcessingNotification(
-          title: 'Processing Voice Notes',
-          body: 'Gemma 4 is processing your shared audio...',
-        );
+        if (_enableNotifications) {
+          await (_notificationReady ?? Future.value());
+          await _notificationService.showProcessingNotification(
+            title: 'Processing Voice Notes',
+            body: 'Gemma 4 is processing your shared audio...',
+          );
+        }
       }
 
       // Now start the async processing
@@ -1131,7 +1200,7 @@ Interview subject/topic
   /// Public method to trigger queue processing
   Future<void> processQueue() async {
     await _startupFuture;
-    _startProcessingQueue();
+    _maybeStartProcessingQueue();
   }
 
   /// Process queue internal loop
@@ -1155,11 +1224,13 @@ Interview subject/topic
       _currentProcessingStartTime = DateTime.now();
       debugPrint('Queue: Processing ${_currentItem!.fileName}');
       if (_enableBackgroundServices) {
-        await (_notificationReady ?? Future.value());
-        await _notificationService.showProcessingNotification(
-          title: 'Processing Voice Notes',
-          body: 'Processing ${_currentItem!.fileName}...',
-        );
+        if (_enableNotifications) {
+          await (_notificationReady ?? Future.value());
+          await _notificationService.showProcessingNotification(
+            title: 'Processing Voice Notes',
+            body: 'Processing ${_currentItem!.fileName}...',
+          );
+        }
       }
       notifyListeners();
 
@@ -1167,8 +1238,9 @@ Interview subject/topic
       // so other instances see it as 'Processing' instead of 'Pending'
       await _saveQueue();
 
+      SummaryRecord? savedRecord;
       try {
-        await _processVoiceNoteInternal(_currentItem!.file);
+        savedRecord = await _processVoiceNoteInternal(_currentItem!.file);
 
         // Mark as completed
         _currentItem!.status = QueueItemStatus.completed;
@@ -1201,7 +1273,7 @@ Interview subject/topic
       await _saveQueue();
 
       // Show notification for completion
-      if (_currentItem!.status == QueueItemStatus.completed) {
+        if (_currentItem!.status == QueueItemStatus.completed) {
         // Try to find the summary title if available, or just use filename
         String title = 'Processing Complete';
         String body = 'Processed ${_currentItem!.fileName}';
@@ -1215,43 +1287,25 @@ Interview subject/topic
               : _gemmaResult!.summary!;
         }
 
-        // Find the summary ID that corresponds to this file
-        String? payload;
-        try {
-          // We assume the record was just saved and is the latest one with this filename
-          final records = await _storageService.getAllRecords();
-          if (records.isNotEmpty) {
-            // Check if the most recent record matches our current file
-            final latest = records.first;
-            if (latest.sourceFileName == _currentItem!.fileName) {
-              payload = latest.id;
-            } else {
-              // Fallback scan
-              final match = records.firstWhere(
-                (r) => r.sourceFileName == _currentItem!.fileName,
-              );
-              payload = match.id;
-            }
-          }
-        } catch (e) {
-          debugPrint('Queue: Error finding record for notification: $e');
-        }
-
         if (_enableBackgroundServices) {
-          _notificationService.showCompletionNotification(
-            title: title,
-            body: body,
-            notificationId: 1001,
-            payload: payload ?? _currentItem!.id,
-          );
+          if (_enableNotifications) {
+            _notificationService.showCompletionNotification(
+              title: title,
+              body: body,
+              notificationId: 1001,
+              payload: savedRecord?.id ?? _currentItem!.id,
+            );
+          }
         }
       } else if (_currentItem!.status == QueueItemStatus.failed) {
         if (_enableBackgroundServices) {
-          _notificationService.showErrorNotification(
-            title: 'Processing Failed',
-            body: 'Failed to process ${_currentItem!.fileName}',
-            notificationId: 1001,
-          );
+          if (_enableNotifications) {
+            _notificationService.showErrorNotification(
+              title: 'Processing Failed',
+              body: 'Failed to process ${_currentItem!.fileName}',
+              notificationId: 1001,
+            );
+          }
         }
       }
 
@@ -1291,7 +1345,7 @@ Interview subject/topic
   }
 
   /// Internal: Actually process a voice note file through Gemma 4
-  Future<void> _processVoiceNoteInternal(File audioFile) async {
+  Future<SummaryRecord?> _processVoiceNoteInternal(File audioFile) async {
     _reset();
     _currentAudioPath = audioFile.path;
     notifyListeners();
@@ -1323,21 +1377,7 @@ Interview subject/topic
 
       // Process with Gemma (using custom prompts if set)
       try {
-        _gemmaResult = await _gemmaService.transcribeAndSummarize(
-          wavFile,
-          systemInstruction: _systemInstruction.isNotEmpty
-              ? _systemInstruction
-              : null,
-          queryInstruction: _queryInstruction.isNotEmpty
-              ? _queryInstruction
-              : null,
-          transcriptionSystem: _transcriptionSystemInstruction.isNotEmpty
-              ? _transcriptionSystemInstruction
-              : null,
-          transcriptionPrompt: _transcriptionPrompt.isNotEmpty
-              ? _transcriptionPrompt
-              : null,
-        );
+        _gemmaResult = await _transcribeAndSummarizeWithFallback(wavFile);
         debugPrint(
           'Gemma result: ${_gemmaResult?.response.substring(0, _gemmaResult!.response.length.clamp(0, 100))}...',
         );
@@ -1360,7 +1400,7 @@ Interview subject/topic
           'Summary: ${_gemmaResult?.summary?.substring(0, (_gemmaResult?.summary?.length ?? 0).clamp(0, 50))}...',
         );
 
-        await _storageService.saveRecord(
+        final savedRecord = await _storageService.saveRecord(
           sourceFileName: displayName,
           sourceFilePath: audioFile.path,
           transcript: _gemmaResult!.transcript ?? _gemmaResult!.response,
@@ -1369,6 +1409,7 @@ Interview subject/topic
           actionItems: _gemmaResult!.actionItems ?? 'None',
         );
         debugPrint('Saved summary to history');
+        return savedRecord;
       } catch (e) {
         debugPrint('Failed to save summary: $e');
       }
@@ -1388,6 +1429,216 @@ Interview subject/topic
         }
       } catch (_) {}
     }
+    return null;
+  }
+
+  Future<GemmaAudioResult> _transcribeAndSummarizeWithFallback(
+    File wavFile,
+  ) async {
+    try {
+      return await _gemmaService.transcribeAndSummarize(
+        wavFile,
+        systemInstruction: _systemInstruction.isNotEmpty
+            ? _systemInstruction
+            : null,
+        queryInstruction: _queryInstruction.isNotEmpty
+            ? _queryInstruction
+            : null,
+        transcriptionSystem: _transcriptionSystemInstruction.isNotEmpty
+            ? _transcriptionSystemInstruction
+            : null,
+        transcriptionPrompt: _transcriptionPrompt.isNotEmpty
+            ? _transcriptionPrompt
+            : null,
+      );
+    } catch (e) {
+      if (!_isTokenOverflowError(e)) rethrow;
+
+      debugPrint('Queue: Falling back to chunked summarization: $e');
+      final transcript = await _transcribeOnly(wavFile);
+      final summary = await _summarizeLargeTranscript(transcript);
+      return summary;
+    }
+  }
+
+  Future<String> _transcribeOnly(File wavFile) async {
+    final result = await _gemmaService.transcribe(
+      wavFile,
+      language: null,
+    );
+    final transcript = result.transcript ?? result.response;
+    if (transcript.trim().isEmpty) {
+      throw Exception('Transcript is empty');
+    }
+    return transcript.trim();
+  }
+
+  Future<GemmaAudioResult> _summarizeLargeTranscript(String transcript) async {
+    final chunks = _splitTranscriptIntoChunks(
+      transcript,
+      maxWordsPerChunk: 220,
+      overlapWords: 25,
+    );
+
+    final chunkNotes = <String>[];
+    for (var i = 0; i < chunks.length; i++) {
+      final chunk = chunks[i];
+      final chunkPrompt =
+          'Summarize this section of a longer voice note in 2-4 concise sentences. '
+          'Preserve names, dates, decisions, and action items. '
+          'Do not add a title or markdown. Section ${i + 1} of ${chunks.length}.';
+      final note = await _gemmaService.chatWithTranscript(chunk, chunkPrompt);
+      final cleaned = note.trim();
+      if (cleaned.isNotEmpty) {
+        chunkNotes.add(cleaned);
+      }
+    }
+
+    final combinedNotes = chunkNotes.isEmpty
+        ? transcript
+        : chunkNotes.asMap().entries.map((entry) {
+            final index = entry.key + 1;
+            return 'Chunk $index:\n${entry.value}';
+          }).join('\n\n');
+
+    final finalPrompt =
+        'Combine the following section notes into the final summary. '
+        'Return exact markdown with the headings TITLE, SUMMARY, KEY POINTS, and ACTION ITEMS. '
+        'Keep the title short, the summary to 2-3 sentences, and key points to 3-5 bullets. '
+        'If there are no action items, write None. Do not mention chunking.';
+    final finalResponse = await _gemmaService.chatWithTranscript(
+      combinedNotes,
+      finalPrompt,
+    );
+
+    return _parseStructuredGemmaResponse(
+      finalResponse,
+      transcript: transcript,
+      rawResponse: finalResponse,
+    );
+  }
+
+  List<String> _splitTranscriptIntoChunks(
+    String transcript, {
+    required int maxWordsPerChunk,
+    required int overlapWords,
+  }) {
+    final words = transcript
+        .split(RegExp(r'\s+'))
+        .where((word) => word.trim().isNotEmpty)
+        .toList();
+    if (words.isEmpty) return [transcript];
+
+    final chunks = <String>[];
+    var start = 0;
+    while (start < words.length) {
+      final end = (start + maxWordsPerChunk).clamp(0, words.length);
+      chunks.add(words.sublist(start, end).join(' '));
+      if (end >= words.length) break;
+      start = end - overlapWords;
+      if (start < 0) start = 0;
+      if (start >= words.length) break;
+    }
+    return chunks;
+  }
+
+  bool _isTokenOverflowError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('input token ids are too long') ||
+        message.contains('exceeding the maximum number of tokens') ||
+        message.contains('status code: 3');
+  }
+
+  GemmaAudioResult _parseStructuredGemmaResponse(
+    String response, {
+    required String transcript,
+    required String rawResponse,
+  }) {
+    final lines = response.split(RegExp(r'\r?\n'));
+    var section = '';
+    String? titleLine;
+    final summaryLines = <String>[];
+    final keyPointLines = <String>[];
+    final actionLines = <String>[];
+
+    for (final line in lines) {
+      final trimmed = line.trim();
+      final lower = trimmed.toLowerCase();
+
+      if (lower.contains('## title') ||
+          lower.contains('**title**') ||
+          lower.startsWith('title:') ||
+          lower == 'title') {
+        section = 'title';
+        continue;
+      }
+      if (lower.contains('## summary') ||
+          lower.contains('**summary**') ||
+          lower.startsWith('summary:') ||
+          lower == 'summary') {
+        section = 'summary';
+        continue;
+      }
+      if (lower.contains('## key points') ||
+          lower.contains('**key points**') ||
+          lower.startsWith('key points:') ||
+          lower == 'key points') {
+        section = 'keypoints';
+        continue;
+      }
+      if (lower.contains('## action items') ||
+          lower.contains('**action items**') ||
+          lower.startsWith('action items:') ||
+          lower == 'action items') {
+        section = 'actions';
+        continue;
+      }
+
+      if (trimmed.isEmpty || trimmed.startsWith('##')) continue;
+
+      final cleaned = trimmed
+          .replaceFirst(RegExp(r'^[•\-\*]\s*'), '')
+          .trim();
+      if (cleaned.isEmpty) continue;
+
+      switch (section) {
+        case 'title':
+          titleLine ??= cleaned;
+          break;
+        case 'summary':
+          summaryLines.add(cleaned);
+          break;
+        case 'keypoints':
+          keyPointLines.add(cleaned);
+          break;
+        case 'actions':
+          if (!cleaned.toLowerCase().contains('none')) {
+            actionLines.add(cleaned);
+          }
+          break;
+        default:
+          if (summaryLines.length < 3) {
+            summaryLines.add(cleaned);
+          }
+      }
+    }
+
+    titleLine ??= summaryLines.isNotEmpty
+        ? summaryLines.first.length > 50
+            ? summaryLines.first.substring(0, 50)
+            : summaryLines.first
+        : transcript.split(RegExp(r'\s+')).take(6).join(' ');
+
+    return GemmaAudioResult(
+      response: rawResponse,
+      transcript: transcript,
+      title: titleLine?.trim().isNotEmpty == true ? titleLine!.trim() : null,
+      summary: summaryLines.isNotEmpty
+          ? summaryLines.join(' ')
+          : 'No summary generated.',
+      keyPoints: keyPointLines.take(5).toList(),
+      actionItems: actionLines.isNotEmpty ? actionLines.join('\n') : 'None',
+    );
   }
 
   void _updateStatus(ProcessingStatus status, String message, double progress) {

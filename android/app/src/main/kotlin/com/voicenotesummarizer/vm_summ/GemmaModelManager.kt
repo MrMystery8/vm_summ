@@ -98,8 +98,9 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
         val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelFile = File(modelsDir, modelName)
+        val markerFile = File(modelsDir, modelName + GemmaModelConfig.CACHE_MARKER_SUFFIX)
         
-        val exists = modelFile.exists() && modelFile.length() > 0
+        val exists = modelFile.exists() && modelFile.length() > 0 && markerFile.exists()
         result.success(mapOf(
             "downloaded" to exists,
             "path" to modelFile.absolutePath,
@@ -133,7 +134,14 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 "name" to GemmaModelConfig.DISPLAY_NAME,
                 "filename" to GemmaModelConfig.LOCAL_FILENAME,
                 "bundledAsset" to GemmaModelConfig.BUNDLED_ASSET,
-                "downloaded" to File(modelsDir, GemmaModelConfig.LOCAL_FILENAME).exists(),
+                "downloaded" to run {
+                    val file = File(modelsDir, GemmaModelConfig.LOCAL_FILENAME)
+                    val marker = File(
+                        modelsDir,
+                        GemmaModelConfig.LOCAL_FILENAME + GemmaModelConfig.CACHE_MARKER_SUFFIX,
+                    )
+                    file.exists() && file.length() > 0 && marker.exists()
+                },
                 "description" to GemmaModelConfig.DESCRIPTION,
                 "estimatedSize" to GemmaModelConfig.ESTIMATED_SIZE
             )
@@ -153,9 +161,15 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         val modelsDir = GemmaModelConfig.modelsDir(context)
         modelsDir.mkdirs()
         val destFile = File(modelsDir, destName)
+        val tmpFile = File(modelsDir, "$destName.tmp")
+        val markerFile = File(modelsDir, destName + GemmaModelConfig.CACHE_MARKER_SUFFIX)
         
         // Check if already copied
-        if (destFile.exists() && destFile.length() > 100 * 1024 * 1024) {
+        if (
+            destFile.exists() &&
+            destFile.length() > 100 * 1024 * 1024 &&
+            markerFile.exists()
+        ) {
             Log.d(TAG, "Model already copied: ${destFile.absolutePath} (${destFile.length()} bytes)")
             result.success(mapOf(
                 "success" to true,
@@ -174,10 +188,16 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 if (destFile.exists()) {
                     destFile.delete()
                 }
+                if (tmpFile.exists()) {
+                    tmpFile.delete()
+                }
+                if (markerFile.exists()) {
+                    markerFile.delete()
+                }
                 
-                // Copy from assets using chunked reading
+                // Copy from assets using chunked reading into a temp file first.
                 context.assets.open(assetName).use { input ->
-                    FileOutputStream(destFile).use { output ->
+                    FileOutputStream(tmpFile).use { output ->
                         val buffer = ByteArray(65536) // 64KB buffer
                         var bytesRead: Int
                         var totalBytes = 0L
@@ -205,6 +225,23 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                         Log.d(TAG, "Copy complete: ${totalBytes / 1024 / 1024} MB")
                     }
                 }
+
+                if (tmpFile.length() == 0L) {
+                    throw IllegalStateException("Model copy failed: 0 bytes copied")
+                }
+
+                if (destFile.exists()) {
+                    destFile.delete()
+                }
+                if (!tmpFile.renameTo(destFile)) {
+                    throw IllegalStateException(
+                        "Atomic rename failed: ${tmpFile.absolutePath} -> ${destFile.absolutePath}",
+                    )
+                }
+
+                markerFile.writeText(
+                    "asset=$assetName\nbytes=${destFile.length()}\nversion=1\n",
+                )
                 
                 withContext(Dispatchers.Main) {
                     eventSink?.success(mapOf(
@@ -226,6 +263,12 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 // Clean up partial file
                 if (destFile.exists()) {
                     destFile.delete()
+                }
+                if (tmpFile.exists()) {
+                    tmpFile.delete()
+                }
+                if (markerFile.exists()) {
+                    markerFile.delete()
                 }
                 
                 withContext(Dispatchers.Main) {
@@ -260,6 +303,7 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         val modelsDir = GemmaModelConfig.modelsDir(context)
         modelsDir.mkdirs()
         val modelFile = File(modelsDir, modelName)
+        val markerFile = File(modelsDir, modelName + GemmaModelConfig.CACHE_MARKER_SUFFIX)
         
         scope.launch {
             try {
@@ -317,10 +361,13 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                                 }
                             }
                         }
-                    }
+                }
                 }
                 
                 Log.d(TAG, "Download complete: ${modelFile.absolutePath} (${modelFile.length()} bytes)")
+                markerFile.writeText(
+                    "downloaded=true\nbytes=${modelFile.length()}\nversion=1\n",
+                )
                 
                 withContext(Dispatchers.Main) {
                     eventSink?.success(mapOf(
@@ -344,6 +391,9 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                 if (modelFile.exists()) {
                     modelFile.delete()
                 }
+                if (markerFile.exists()) {
+                    markerFile.delete()
+                }
                 
                 withContext(Dispatchers.Main) {
                     eventSink?.success(mapOf(
@@ -365,14 +415,21 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
         val modelName = call.argument<String>("modelName") ?: GemmaModelConfig.LOCAL_FILENAME
         val modelsDir = GemmaModelConfig.modelsDir(context)
         val modelFile = File(modelsDir, modelName)
+        val markerFile = File(modelsDir, modelName + GemmaModelConfig.CACHE_MARKER_SUFFIX)
         
         if (modelFile.exists()) {
             val deleted = modelFile.delete()
+            if (markerFile.exists()) {
+                markerFile.delete()
+            }
             result.success(mapOf(
                 "deleted" to deleted,
                 "path" to modelFile.absolutePath
             ))
         } else {
+            if (markerFile.exists()) {
+                markerFile.delete()
+            }
             result.success(mapOf(
                 "deleted" to false,
                 "path" to modelFile.absolutePath,

@@ -25,7 +25,7 @@ class QueueScreen extends StatelessWidget {
         actions: [
           Consumer<ProcessingState>(
             builder: (context, state, _) {
-              if (state.queueCount == 0) return const SizedBox();
+              if (state.pendingQueueCount == 0) return const SizedBox();
               return IconButton(
                 icon: const Icon(Icons.delete_sweep, color: Colors.redAccent),
                 tooltip: 'Clear Queue',
@@ -38,20 +38,14 @@ class QueueScreen extends StatelessWidget {
       body: SafeArea(
         child: Consumer<ProcessingState>(
           builder: (context, state, _) {
-            // Show current processing item + queued items
-            final allItems = <_QueueDisplayItem>[];
-
-            // Add currently processing item if any
-            if (state.currentItem != null) {
-              allItems.add(
-                _QueueDisplayItem(item: state.currentItem!, isProcessing: true),
-              );
-            }
-
-            // Add queued items
-            for (final item in state.queueItems) {
-              allItems.add(_QueueDisplayItem(item: item, isProcessing: false));
-            }
+            final allItems = state.displayQueueItems
+                .map(
+                  (item) => _QueueDisplayItem(
+                    item: item,
+                    isProcessing: item.status == QueueItemStatus.processing,
+                  ),
+                )
+                .toList();
 
             if (allItems.isEmpty) {
               return _buildEmptyState();
@@ -119,7 +113,7 @@ class QueueScreen extends StatelessWidget {
   }
 
   Widget _buildQueueSummary(ProcessingState state) {
-    final pendingCount = state.queueCount;
+    final visibleCount = state.queueCount;
     final totalEstimate = state.totalQueueEstimate;
 
     return Container(
@@ -148,7 +142,7 @@ class QueueScreen extends StatelessWidget {
                 Text(
                   state.currentItem != null
                       ? 'Processing...'
-                      : '$pendingCount item${pendingCount == 1 ? '' : 's'} in queue',
+                      : '$visibleCount item${visibleCount == 1 ? '' : 's'} in queue',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
@@ -334,7 +328,7 @@ class QueueScreen extends StatelessWidget {
           style: TextStyle(color: Colors.white),
         ),
         content: Text(
-          'Remove all ${state.queueCount} pending items from the queue?',
+          'Remove all ${state.pendingQueueCount} pending items from the queue?',
           style: TextStyle(color: Colors.white.withAlpha(180)),
         ),
         actions: [

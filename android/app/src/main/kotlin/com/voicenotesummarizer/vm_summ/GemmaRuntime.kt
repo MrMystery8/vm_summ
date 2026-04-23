@@ -19,6 +19,7 @@ import java.util.concurrent.Executors
  */
 object GemmaRuntime {
     private const val TAG = "GemmaRuntime"
+    const val MAX_NUM_TOKENS = 8192
     
     private val initLock = Mutex()
     @Volatile private var engineDeferred: CompletableDeferred<Engine>? = null
@@ -53,12 +54,13 @@ object GemmaRuntime {
                 val engine = withContext(dispatcher) {
                     val useCpuOnly = forceCpuOnly || isEmulator()
                     Log.d(TAG, "Engine backend mode: ${if (useCpuOnly) "CPU_ONLY" else "GPU_MAIN"}")
+                    Log.d(TAG, "Engine maxNumTokens budget: $MAX_NUM_TOKENS")
                     val config = EngineConfig(
                         modelPath = modelFile.absolutePath,
                         backend = if (useCpuOnly) Backend.CPU() else Backend.GPU(),
                         visionBackend = if (useCpuOnly) Backend.CPU() else Backend.GPU(),
                         audioBackend = Backend.CPU(),
-                        maxNumTokens = 2048,
+                        maxNumTokens = MAX_NUM_TOKENS,
                         cacheDir = context.cacheDir.absolutePath
                     )
                     Engine(config).also { it.initialize() }

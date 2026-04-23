@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/processing_state.dart';
+import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/summary_result_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -55,10 +57,20 @@ class MainNavigator extends StatefulWidget {
 }
 
 class _MainNavigatorState extends State<MainNavigator> {
+  bool _handledStartupNotification = false;
+
   @override
   void initState() {
     super.initState();
     _initializeApp();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_handledStartupNotification) return;
+    _handledStartupNotification = true;
+    _handlePendingStartupNotification();
   }
 
   Future<void> _initializeApp() async {
@@ -66,10 +78,34 @@ class _MainNavigatorState extends State<MainNavigator> {
     // This prevents double-initialization which can cause crashes
   }
 
+  Future<void> _handlePendingStartupNotification() async {
+    final state = context.read<ProcessingState>();
+    await state.startupReady;
+    if (!mounted) return;
+
+    final payload = state.consumePendingSummaryNotificationPayload();
+    if (payload == null) return;
+
+    final record = await state.resolveSummaryRecord(payload);
+    if (!mounted) return;
+
+    final navigator = navigatorKey.currentState;
+    if (navigator == null) {
+      state.restorePendingSummaryNotificationPayload(payload);
+      return;
+    }
+
+    navigator.push(
+      MaterialPageRoute(
+        builder: (_) => record != null
+            ? SummaryResultScreen(record: record)
+            : const HistoryScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // No auto-navigation based on state.
-    // Navigation should only happen via user interaction (Notification tap or clicking item in Queue/History).
     return HomeScreen(
       onProcessingStart: () {
         // Optional: show a snackbar or small indicator instead of full screen redirect

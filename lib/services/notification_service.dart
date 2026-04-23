@@ -7,11 +7,14 @@ class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
   NotificationService._internal();
+  NotificationService.test({NotificationAppLaunchDetails? launchDetails})
+      : _launchDetails = launchDetails;
 
   final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
   bool _isInitialized = false;
+  NotificationAppLaunchDetails? _launchDetails;
 
   static const int _processingNotificationId = 1001;
 
@@ -46,12 +49,24 @@ class NotificationService {
 
       // Request permissions
       await _requestPermissions();
+      _launchDetails =
+          await flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
 
       _isInitialized = true;
       debugPrint('NotificationService initialized');
     } catch (e) {
       debugPrint('Error initializing NotificationService: $e');
     }
+  }
+
+  NotificationAppLaunchDetails? get launchDetails => _launchDetails;
+
+  String? get launchNotificationPayload {
+    final details = _launchDetails;
+    if (details?.didNotificationLaunchApp ?? false) {
+      return details?.notificationResponse?.payload;
+    }
+    return null;
   }
 
   Future<void> _requestPermissions() async {
