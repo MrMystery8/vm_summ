@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -9,34 +10,51 @@ import 'package:share_handler/share_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vm_summ/providers/processing_state.dart';
 import 'package:vm_summ/services/audio_converter.dart';
+import 'package:vm_summ/services/foreground_service_adapter.dart';
 import 'package:vm_summ/services/gemma_audio_service.dart';
 import 'package:vm_summ/services/notification_service.dart';
 import 'package:vm_summ/services/share_handler_service.dart';
 import 'package:vm_summ/services/summary_storage_service.dart';
+import 'package:vm_summ/utils/notification_destination.dart';
+import 'package:vm_summ/screens/history_screen.dart';
+import 'package:vm_summ/screens/note_detail_screen.dart';
 
 const MethodChannel _pathProviderChannel = MethodChannel(
   'plugins.flutter.io/path_provider',
 );
 
 class FakeAudioConverter extends AudioConverter {
-  @override
-  Future<void> initialize() async {}
+  final List<String>? events;
+
+  FakeAudioConverter({this.events});
 
   @override
-  Future<File> convertTo16kMonoWav(File inputFile) async => inputFile;
+  Future<void> initialize() async {
+    events?.add('audio.initialize');
+  }
+
+  @override
+  Future<File> convertTo16kMonoWav(File inputFile) async {
+    events?.add('audio.convert');
+    return inputFile;
+  }
 }
 
 class FakeGemmaAudioService extends GemmaAudioService {
+  final List<String>? events;
   String? lastSystemInstruction;
   String? lastQueryInstruction;
   String? lastTranscriptionSystem;
   String? lastTranscriptionPrompt;
   bool initialized = false;
 
+  FakeGemmaAudioService({this.events});
+
   @override
   Future<void> initializeWithBundledModel({
     void Function(ModelDownloadProgress)? onProgress,
   }) async {
+    events?.add('gemma.initialize');
     initialized = true;
   }
 
@@ -53,6 +71,7 @@ class FakeGemmaAudioService extends GemmaAudioService {
     lastQueryInstruction = queryInstruction;
     lastTranscriptionSystem = transcriptionSystem;
     lastTranscriptionPrompt = transcriptionPrompt;
+    events?.add('gemma.transcribeAndSummarize');
 
     return GemmaAudioResult(
       response: 'response',
@@ -62,6 +81,28 @@ class FakeGemmaAudioService extends GemmaAudioService {
       keyPoints: const ['Point one'],
       actionItems: 'None',
     );
+  }
+
+  @override
+  Future<GemmaAudioResult> transcribe(
+    File audioFile, {
+    String? language,
+  }) async {
+    events?.add('gemma.transcribe');
+    return GemmaAudioResult(
+      response: 'transcript',
+      transcript: 'transcript',
+      title: null,
+      summary: null,
+      keyPoints: const [],
+      actionItems: null,
+    );
+  }
+
+  @override
+  Future<String> chatWithTranscript(String transcript, String prompt) async {
+    events?.add('gemma.chat');
+    return 'Chunk summary';
   }
 }
 
@@ -185,12 +226,45 @@ class EmittingShareHandlerService extends ShareHandlerService {
 class SlowAudioConverter extends FakeAudioConverter {
   final Duration delay;
 
-  SlowAudioConverter(this.delay);
+  SlowAudioConverter(this.delay, {super.events});
 
   @override
   Future<File> convertTo16kMonoWav(File inputFile) async {
     await Future<void>.delayed(delay);
+    events?.add('audio.convert');
     return inputFile;
+  }
+}
+
+class RecordingForegroundServiceAdapter extends ForegroundServiceAdapter {
+  final List<String> events = [];
+  bool running = false;
+
+  @override
+  Future<void> initialize() async {
+    events.add('foreground.initialize');
+  }
+
+  @override
+  Future<bool> isRunning() async {
+    events.add('foreground.isRunning');
+    return running;
+  }
+
+  @override
+  Future<void> startService({
+    required String notificationTitle,
+    required String notificationText,
+    required TaskHandler Function() callback,
+  }) async {
+    events.add('foreground.start:$notificationTitle|$notificationText');
+    running = true;
+  }
+
+  @override
+  Future<void> stopService() async {
+    events.add('foreground.stop');
+    running = false;
   }
 }
 
@@ -550,4 +624,102 @@ void main() {
     expect(assessSharedAudioAttachment(fallbackAttachment).accepted, isTrue);
     expect(assessSharedAudioAttachment(rejectedAttachment).accepted, isFalse);
   });
+
+  test(
+    'foreground service starts before model init and stops when no queue exists',
+    () async {
+      final events = <String>[];
+      final foreground = RecordingForegroundServiceAdapter();
+      final state = ProcessingState(
+        audioConverter: FakeAudioConverter(events: events),
+        gemmaService: FakeGemmaAudioService(events: events),
+        storageService: FakeSummaryStorageService(),
+        foregroundServiceAdapter: foreground,
+        enableBackgroundServices: true,
+        enableNotifications: false,
+      );
+
+      await state.initialize();
+
+      expect(foreground.events, isNotEmpty);
+      expect(
+        foreground.events.first,
+        startsWith('foreground.initialize'),
+      );
+      expect(
+        foreground.events,
+        contains(
+          'foreground.start:Preparing Voice Notes|Loading Gemma 4 E2B model...',
+        ),
+      );
+      expect(foreground.events.last, 'foreground.stop');
+      expect(events, containsAllInOrder(['audio.initialize', 'gemma.initialize']));
+      expect(foreground.running, isFalse);
+    },
+  );
+
+  test(
+    'foreground service stays alive until queued processing drains',
+    () async {
+      final events = <String>[];
+      final foreground = RecordingForegroundServiceAdapter();
+      final state = ProcessingState(
+        audioConverter: SlowAudioConverter(
+          const Duration(milliseconds: 250),
+          events: events,
+        ),
+        gemmaService: FakeGemmaAudioService(events: events),
+        storageService: FakeSummaryStorageService(),
+        foregroundServiceAdapter: foreground,
+        enableBackgroundServices: true,
+        enableNotifications: false,
+      );
+
+      final audioFile = File('${tempDir.path}/foreground_queue.ogg');
+      await audioFile.writeAsString('audio');
+
+      expect(state.queueFile(audioFile), isNotNull);
+      final initFuture = state.initialize();
+
+      await _waitForCondition(() => state.currentItem != null);
+      expect(foreground.running, isTrue);
+      expect(
+        foreground.events,
+        contains(
+          'foreground.start:Preparing Voice Notes|Loading Gemma 4 E2B model...',
+        ),
+      );
+      expect(foreground.events, isNot(contains('foreground.stop')));
+
+      await initFuture;
+      await _waitForQueueToDrain(state);
+      await _waitForCondition(() => !foreground.running);
+
+      expect(foreground.running, isFalse);
+      expect(foreground.events.last, 'foreground.stop');
+      expect(events, contains('audio.convert'));
+      expect(events, contains('gemma.transcribeAndSummarize'));
+    },
+  );
+
+  test(
+    'notification destination helper returns the history detail UI',
+    () async {
+      final storage = FakeSummaryStorageService();
+      final savedRecord = await storage.saveRecord(
+        sourceFileName: 'Notification payload',
+        sourceFilePath: '${tempDir.path}/notification.ogg',
+        transcript: 'transcript',
+        summary: 'summary',
+        keyPoints: const ['Point one'],
+        actionItems: 'None',
+      );
+
+      final destination = notificationDestinationForRecord(savedRecord);
+      final fallback = notificationFallbackDestination();
+
+      expect(destination, isA<NoteDetailScreen>());
+      expect(fallback, isA<HistoryScreen>());
+    },
+  );
 }

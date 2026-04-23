@@ -9,18 +9,20 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/audio_converter.dart';
+import '../services/foreground_service_adapter.dart';
 import '../services/gemma_audio_service.dart';
 import '../services/summary_storage_service.dart';
 import '../services/notification_service.dart';
 import '../main.dart'; // For navigatorKey
 import '../services/share_handler_service.dart';
-import '../screens/history_screen.dart';
-import '../screens/summary_result_screen.dart';
+import '../utils/notification_destination.dart';
 
 // Callback for foreground service init
 @pragma('vm:entry-point')
-void startCallback() {
-  FlutterForegroundTask.setTaskHandler(AudioProcessingTaskHandler());
+TaskHandler startCallback() {
+  final handler = AudioProcessingTaskHandler();
+  FlutterForegroundTask.setTaskHandler(handler);
+  return handler;
 }
 
 class AudioProcessingTaskHandler extends TaskHandler {
@@ -132,6 +134,7 @@ class ProcessingState extends ChangeNotifier {
   final SummaryStorageService _storageService;
   final NotificationService _notificationService;
   final ShareHandlerService _shareHandlerService;
+  final ForegroundServiceAdapter _foregroundServiceAdapter;
   final bool _enableBackgroundServices;
   final bool _enableNotifications;
   late final Future<void> _startupFuture;
@@ -501,7 +504,6 @@ Interview subject/topic
         _startPolling();
 
         if (_enableNotifications) {
-          await _initForegroundTask();
           _notificationReady = _notificationService.initialize(
             onDidReceiveNotificationResponse:
                 (NotificationResponse details) async {
@@ -526,42 +528,16 @@ Interview subject/topic
     }
   }
 
-  // Initialize Foreground Service
-  Future<void> _initForegroundTask() async {
-    try {
-      FlutterForegroundTask.init(
-        androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'voice_note_processing',
-          channelName: 'Voice Note Processing',
-          channelDescription: 'Processing voice notes in background',
-          channelImportance: NotificationChannelImportance.LOW,
-          priority: NotificationPriority.LOW,
-        ),
-        iosNotificationOptions: const IOSNotificationOptions(
-          showNotification: true,
-          playSound: false,
-        ),
-        foregroundTaskOptions: const ForegroundTaskOptions(
-          interval: 5000,
-          isOnceEvent: false,
-          autoRunOnBoot: false,
-          allowWakeLock: true,
-          allowWifiLock: true,
-        ),
-      );
-    } catch (e) {
-      debugPrint('Queue: Foreground task init unavailable: $e');
-    }
-  }
-
   /// Start foreground service to keep app alive
-  Future<void> _startForegroundService() async {
+  Future<void> _startForegroundService({
+    required String notificationTitle,
+    required String notificationText,
+  }) async {
     try {
-      if (await FlutterForegroundTask.isRunningService) return;
-
-      await FlutterForegroundTask.startService(
-        notificationTitle: 'Processing Voice Notes',
-        notificationText: 'Please wait...',
+      await _foregroundServiceAdapter.initialize();
+      await _foregroundServiceAdapter.startService(
+        notificationTitle: notificationTitle,
+        notificationText: notificationText,
         callback: startCallback,
       );
     } catch (e) {
@@ -572,9 +548,7 @@ Interview subject/topic
   /// Stop foreground service
   Future<void> _stopForegroundService() async {
     try {
-      if (await FlutterForegroundTask.isRunningService) {
-        await FlutterForegroundTask.stopService();
-      }
+      await _foregroundServiceAdapter.stopService();
     } catch (e) {
       debugPrint('Queue: Foreground service stop unavailable: $e');
     }
@@ -776,6 +750,7 @@ Interview subject/topic
     SummaryStorageService? storageService,
     NotificationService? notificationService,
     ShareHandlerService? shareHandlerService,
+    ForegroundServiceAdapter? foregroundServiceAdapter,
     bool enableBackgroundServices = true,
     bool enableNotifications = true,
   }) : _audioConverter = audioConverter ?? AudioConverter(),
@@ -783,6 +758,8 @@ Interview subject/topic
        _storageService = storageService ?? SummaryStorageService(),
        _notificationService = notificationService ?? NotificationService(),
        _shareHandlerService = shareHandlerService ?? ShareHandlerService(),
+       _foregroundServiceAdapter =
+           foregroundServiceAdapter ?? FlutterForegroundServiceAdapter(),
        _enableBackgroundServices = enableBackgroundServices,
        _enableNotifications = enableNotifications {
     _startupFuture = _bootstrapStartup();
@@ -823,16 +800,14 @@ Interview subject/topic
     final record = await resolveSummaryRecord(payload);
     if (record != null) {
       navigator.push(
-        MaterialPageRoute(
-          builder: (_) => SummaryResultScreen(record: record),
-        ),
+        MaterialPageRoute(builder: (_) => notificationDestinationForRecord(record)),
       );
       return;
     }
 
     debugPrint('Queue: Notification payload $payload did not resolve');
     navigator.push(
-      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+      MaterialPageRoute(builder: (_) => notificationFallbackDestination()),
     );
   }
 
@@ -903,11 +878,10 @@ Interview subject/topic
 
     while (retryCount < maxRetries) {
       try {
-        if (_enableBackgroundServices && _enableNotifications) {
-          await (_notificationReady ?? Future.value());
-          await _notificationService.showProcessingNotification(
-            title: 'Preparing Voice Notes',
-            body: 'Loading Gemma 4 E2B model...',
+        if (_enableBackgroundServices) {
+          await _startForegroundService(
+            notificationTitle: 'Preparing Voice Notes',
+            notificationText: 'Loading Gemma 4 E2B model...',
           );
         }
 
@@ -944,9 +918,20 @@ Interview subject/topic
         // Auto-process any queued files after init
         _maybeStartProcessingQueue();
 
+        if (_enableBackgroundServices &&
+            !_isProcessingQueue &&
+            pendingQueueCount == 0) {
+          await _stopForegroundService();
+        }
+
         _isInitializing = false;
         return; // Success - exit
       } catch (e) {
+        if (_enableBackgroundServices &&
+            !_isProcessingQueue &&
+            pendingQueueCount == 0) {
+          await _stopForegroundService();
+        }
         retryCount++;
         debugPrint('Gemma initialization error (attempt $retryCount): $e');
 
@@ -1160,7 +1145,10 @@ Interview subject/topic
 
       if (_enableBackgroundServices) {
         // Start foreground service to keep alive
-        await _startForegroundService();
+        await _startForegroundService(
+          notificationTitle: 'Processing Voice Notes',
+          notificationText: 'Please wait...',
+        );
         if (_enableNotifications) {
           await (_notificationReady ?? Future.value());
           await _notificationService.showProcessingNotification(

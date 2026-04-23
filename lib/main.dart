@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/processing_state.dart';
-import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/summary_result_screen.dart';
+import 'utils/notification_destination.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -98,8 +97,8 @@ class _MainNavigatorState extends State<MainNavigator> {
     navigator.push(
       MaterialPageRoute(
         builder: (_) => record != null
-            ? SummaryResultScreen(record: record)
-            : const HistoryScreen(),
+            ? notificationDestinationForRecord(record)
+            : notificationFallbackDestination(),
       ),
     );
   }
