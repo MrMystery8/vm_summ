@@ -1,138 +1,136 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/processing_state.dart';
 
-/// Screen for managing the processing queue
-/// Allows users to view, reorder, and remove queued items
+import '../providers/processing_state.dart';
+import '../ui/premium_ui.dart';
+
 class QueueScreen extends StatelessWidget {
   const QueueScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D1A),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Processing Queue',
-          style: TextStyle(color: Colors.white),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
+        title: const Text('Processing Queue'),
         actions: [
           Consumer<ProcessingState>(
             builder: (context, state, _) {
-              if (state.pendingQueueCount == 0) return const SizedBox();
+              if (state.pendingQueueCount == 0) {
+                return const SizedBox.shrink();
+              }
               return IconButton(
-                icon: const Icon(Icons.delete_sweep, color: Colors.redAccent),
+                icon: const Icon(Icons.delete_sweep_rounded),
                 tooltip: 'Clear Queue',
                 onPressed: () => _showClearConfirmation(context, state),
               );
             },
           ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: SafeArea(
-        child: Consumer<ProcessingState>(
-          builder: (context, state, _) {
-            final allItems = state.displayQueueItems
-                .map(
-                  (item) => _QueueDisplayItem(
-                    item: item,
-                    isProcessing: item.status == QueueItemStatus.processing,
+      body: PremiumBackdrop(
+        child: SafeArea(
+          child: Consumer<ProcessingState>(
+            builder: (context, state, _) {
+              final allItems = state.displayQueueItems
+                  .map(
+                    (item) => _QueueDisplayItem(
+                      item: item,
+                      isProcessing: item.status == QueueItemStatus.processing,
+                    ),
+                  )
+                  .toList();
+
+              if (allItems.isEmpty) {
+                return PremiumEmptyState(
+                  icon: Icons.queue_music_rounded,
+                  title: 'Queue is empty',
+                  message:
+                      'Share a voice note or import audio to start the next run.',
+                );
+              }
+
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    child: _buildQueueSummary(context, state),
                   ),
-                )
-                .toList();
-
-            if (allItems.isEmpty) {
-              return _buildEmptyState();
-            }
-
-            return Column(
-              children: [
-                // Queue summary
-                _buildQueueSummary(state),
-
-                // Queue list
-                Expanded(
-                  child: ReorderableListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: allItems.length,
-                    onReorder: (oldIndex, newIndex) {
-                      // Adjust for currently processing item
-                      if (state.currentItem != null) {
-                        if (oldIndex == 0 || newIndex == 0) {
-                          return; // Can't move processing item
+                  Expanded(
+                    child: ReorderableListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      itemCount: allItems.length,
+                      buildDefaultDragHandles: false,
+                      proxyDecorator: (child, index, animation) {
+                        return AnimatedBuilder(
+                          animation: animation,
+                          builder: (context, _) {
+                            final t = Curves.easeOutCubic.transform(
+                              animation.value,
+                            );
+                            return Transform.scale(
+                              scale: 0.98 + (t * 0.02),
+                              child: child,
+                            );
+                          },
+                        );
+                      },
+                      onReorder: (oldIndex, newIndex) {
+                        if (state.currentItem != null) {
+                          if (oldIndex == 0 || newIndex == 0) {
+                            return;
+                          }
+                          state.reorderQueue(oldIndex - 1, newIndex - 1);
+                        } else {
+                          state.reorderQueue(oldIndex, newIndex);
                         }
-                        state.reorderQueue(oldIndex - 1, newIndex - 1);
-                      } else {
-                        state.reorderQueue(oldIndex, newIndex);
-                      }
-                    },
-                    itemBuilder: (context, index) {
-                      final displayItem = allItems[index];
-                      return _buildQueueItem(
-                        context,
-                        displayItem,
-                        index,
-                        state,
-                      );
-                    },
+                      },
+                      itemBuilder: (context, index) {
+                        final displayItem = allItems[index];
+                        return _buildQueueItem(
+                          context,
+                          displayItem,
+                          index,
+                          state,
+                        );
+                      },
+                    ),
                   ),
-                ),
-              ],
-            );
-          },
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.queue_music, size: 64, color: Colors.white.withAlpha(60)),
-          const SizedBox(height: 16),
-          Text(
-            'Queue is empty',
-            style: TextStyle(color: Colors.white.withAlpha(100), fontSize: 18),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Share a voice note to start processing',
-            style: TextStyle(color: Colors.white.withAlpha(60), fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQueueSummary(ProcessingState state) {
+  Widget _buildQueueSummary(BuildContext context, ProcessingState state) {
     final visibleCount = state.queueCount;
     final totalEstimate = state.totalQueueEstimate;
 
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF00D9FF).withAlpha(40)),
-      ),
+    return PremiumSurface(
+      padding: const EdgeInsets.all(18),
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.cyan.withAlpha(30),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
-              color: const Color(0xFF00D9FF).withAlpha(30),
-              borderRadius: BorderRadius.circular(12),
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.cyan.withAlpha(20),
+                  AppColors.violet.withAlpha(12),
+                ],
+              ),
             ),
-            child: const Icon(Icons.queue, color: Color(0xFF00D9FF), size: 24),
+            child: const Icon(Icons.queue_music_rounded, color: AppColors.cyan),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -141,22 +139,25 @@ class QueueScreen extends StatelessWidget {
               children: [
                 Text(
                   state.currentItem != null
-                      ? 'Processing...'
+                      ? 'Processing now'
                       : '$visibleCount item${visibleCount == 1 ? '' : 's'} in queue',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 16,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                if (totalEstimate.inSeconds > 0)
-                  Text(
-                    'Est. ${_formatDuration(totalEstimate)} remaining',
-                    style: TextStyle(
-                      color: Colors.white.withAlpha(120),
-                      fontSize: 13,
-                    ),
+                const SizedBox(height: 4),
+                Text(
+                  totalEstimate.inSeconds > 0
+                      ? 'Estimated ${_formatDuration(totalEstimate)} remaining'
+                      : 'Items stay in order and can be rearranged at any time.',
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(140),
+                    fontSize: 13,
+                    height: 1.35,
                   ),
+                ),
               ],
             ),
           ),
@@ -166,7 +167,7 @@ class QueueScreen extends StatelessWidget {
               height: 24,
               child: CircularProgressIndicator(
                 strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation(Color(0xFF00D9FF)),
+                valueColor: AlwaysStoppedAnimation(AppColors.cyan),
               ),
             ),
         ],
@@ -190,129 +191,129 @@ class QueueScreen extends StatelessWidget {
           : DismissDirection.endToStart,
       background: Container(
         alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
+        padding: const EdgeInsets.only(right: 18),
         margin: const EdgeInsets.only(bottom: 12),
         decoration: BoxDecoration(
-          color: Colors.red.withAlpha(80),
-          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: [AppColors.red.withAlpha(190), AppColors.red.withAlpha(90)],
+          ),
+          borderRadius: BorderRadius.circular(24),
         ),
-        child: const Icon(Icons.delete, color: Colors.white),
+        child: const Icon(Icons.delete_rounded, color: Colors.white),
       ),
       onDismissed: (_) {
         state.removeFromQueue(item.id);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Removed: ${item.fileName}'),
-            duration: const Duration(seconds: 2),
+            backgroundColor: AppColors.surfaceElevated,
           ),
         );
       },
-      child: Container(
-        key: Key('item_$index'),
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isProcessing
-              ? const Color(0xFF00D9FF).withAlpha(20)
-              : Colors.white.withAlpha(8),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isProcessing
-                ? const Color(0xFF00D9FF).withAlpha(60)
-                : Colors.white.withAlpha(15),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: PremiumSurface(
+          key: Key('item_$index'),
+          padding: const EdgeInsets.all(16),
+          borderRadius: BorderRadius.circular(24),
+          borderColor: isProcessing
+              ? AppColors.cyan.withAlpha(50)
+              : Colors.white.withAlpha(12),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              isProcessing
+                  ? AppColors.cyan.withAlpha(14)
+                  : AppColors.surface.withAlpha(250),
+              AppColors.surfaceElevated.withAlpha(255),
+            ],
           ),
-        ),
-        child: Row(
-          children: [
-            // Drag handle (only for non-processing items)
-            if (!isProcessing)
-              ReorderableDragStartListener(
-                index: index,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: Icon(
-                    Icons.drag_handle,
-                    color: Colors.white.withAlpha(60),
-                  ),
-                ),
-              )
-            else
-              const Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation(Color(0xFF00D9FF)),
-                  ),
-                ),
-              ),
-
-            // Status indicator
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 12),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: isProcessing
-                    ? const Color(0xFF00D9FF)
-                    : Colors.white.withAlpha(40),
-              ),
-            ),
-
-            // File info
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.fileName,
-                    style: TextStyle(
-                      color: Colors.white.withAlpha(isProcessing ? 255 : 200),
-                      fontSize: 14,
-                      fontWeight: isProcessing
-                          ? FontWeight.w600
-                          : FontWeight.normal,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    isProcessing
-                        ? 'Processing now...'
-                        : 'Est. ${item.formattedEstimate}',
-                    style: TextStyle(
+          child: Row(
+            children: [
+              if (!isProcessing)
+                ReorderableDragStartListener(
+                  index: index,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Icon(
+                      Icons.drag_handle_rounded,
                       color: Colors.white.withAlpha(80),
-                      fontSize: 12,
                     ),
                   ),
-                ],
-              ),
-            ),
-
-            // Position badge
-            if (!isProcessing)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withAlpha(10),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '#${index + 1}',
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(100),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                )
+              else
+                const Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(AppColors.cyan),
+                    ),
                   ),
                 ),
+              Container(
+                width: 10,
+                height: 10,
+                margin: const EdgeInsets.only(right: 12),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isProcessing
+                      ? AppColors.cyan
+                      : Colors.white.withAlpha(44),
+                ),
               ),
-          ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.fileName,
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(isProcessing ? 255 : 220),
+                        fontSize: 14,
+                        fontWeight: isProcessing
+                            ? FontWeight.w700
+                            : FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isProcessing
+                          ? 'Processing now'
+                          : 'Estimated ${item.formattedEstimate}',
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(120),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (!isProcessing)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(8),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '#${index + 1}',
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(110),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -322,7 +323,7 @@ class QueueScreen extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: AppColors.surfaceElevated,
         title: const Text(
           'Clear Queue?',
           style: TextStyle(color: Colors.white),
@@ -343,14 +344,14 @@ class QueueScreen extends StatelessWidget {
             onPressed: () {
               state.clearQueue();
               Navigator.pop(context);
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Queue cleared')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Queue cleared'),
+                  backgroundColor: AppColors.surfaceElevated,
+                ),
+              );
             },
-            child: const Text(
-              'Clear',
-              style: TextStyle(color: Colors.redAccent),
-            ),
+            child: const Text('Clear', style: TextStyle(color: AppColors.red)),
           ),
         ],
       ),
@@ -364,7 +365,6 @@ class QueueScreen extends StatelessWidget {
   }
 }
 
-/// Helper class for displaying queue items
 class _QueueDisplayItem {
   final QueueItem item;
   final bool isProcessing;

@@ -1,12 +1,13 @@
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../providers/processing_state.dart';
+import '../ui/premium_ui.dart';
 import '../utils/slider_bounds.dart';
 
-/// Results screen showing summary, transcript, and audio playback
 class ResultsScreen extends StatefulWidget {
   const ResultsScreen({super.key});
 
@@ -14,35 +15,32 @@ class ResultsScreen extends StatefulWidget {
   State<ResultsScreen> createState() => _ResultsScreenState();
 }
 
-class _ResultsScreenState extends State<ResultsScreen>
-    with SingleTickerProviderStateMixin {
+class _ResultsScreenState extends State<ResultsScreen> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlaying = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
   bool _transcriptExpanded = false;
-  late AnimationController _animationController;
 
   @override
   void initState() {
     super.initState();
     _setupAudioPlayer();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
   }
 
   void _setupAudioPlayer() {
     _audioPlayer.onDurationChanged.listen((d) {
+      if (!mounted) return;
       setState(() => _duration = d);
     });
 
     _audioPlayer.onPositionChanged.listen((p) {
+      if (!mounted) return;
       setState(() => _position = p);
     });
 
     _audioPlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
       setState(() {
         _isPlaying = false;
         _position = Duration.zero;
@@ -55,10 +53,10 @@ class _ResultsScreenState extends State<ResultsScreen>
 
     if (_isPlaying) {
       await _audioPlayer.pause();
-      setState(() => _isPlaying = false);
+      if (mounted) setState(() => _isPlaying = false);
     } else {
       await _audioPlayer.play(DeviceFileSource(audioPath));
-      setState(() => _isPlaying = true);
+      if (mounted) setState(() => _isPlaying = true);
     }
   }
 
@@ -68,8 +66,7 @@ class _ResultsScreenState extends State<ResultsScreen>
       SnackBar(
         content: Text('$label copied to clipboard'),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFF00D9FF),
-        duration: const Duration(seconds: 2),
+        backgroundColor: AppColors.cyan,
       ),
     );
   }
@@ -78,24 +75,24 @@ class _ResultsScreenState extends State<ResultsScreen>
     final summary = state.summaryResult;
     final transcript = state.transcriptionResult;
 
-    String shareText = '📝 Voice Note Summary\n\n';
+    String shareText = 'Voice Note Summary\n\n';
 
     if (summary != null) {
-      shareText += '💡 Summary:\n${summary.summary}\n\n';
+      shareText += 'Summary:\n${summary.summary}\n\n';
       if (summary.keyPoints.isNotEmpty) {
-        shareText += '🔹 Key Points:\n';
+        shareText += 'Key points:\n';
         for (final point in summary.keyPoints) {
-          shareText += '• $point\n';
+          shareText += '- $point\n';
         }
         shareText += '\n';
       }
       if (summary.hasActionItems) {
-        shareText += '✅ Action Items:\n${summary.actionItems}\n\n';
+        shareText += 'Action items:\n${summary.actionItems}\n\n';
       }
     }
 
     if (transcript != null && transcript.text.isNotEmpty) {
-      shareText += '📄 Full Transcript:\n${transcript.text}';
+      shareText += 'Transcript:\n${transcript.text}';
     }
 
     Share.share(shareText);
@@ -104,190 +101,185 @@ class _ResultsScreenState extends State<ResultsScreen>
   @override
   void dispose() {
     _audioPlayer.dispose();
-    _animationController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D1A),
-      body: Consumer<ProcessingState>(
-        builder: (context, state, _) => CustomScrollView(
-          slivers: [
-            // App bar
-            SliverAppBar(
-              backgroundColor: const Color(0xFF0D0D1A),
-              pinned: true,
-              expandedHeight: 120,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-                onPressed: () => state.clear(),
-              ),
-              actions: [
-                IconButton(
-                  icon: const Icon(
-                    Icons.share_rounded,
-                    color: Color(0xFF00D9FF),
+      backgroundColor: AppColors.background,
+      body: PremiumBackdrop(
+        child: Consumer<ProcessingState>(
+          builder: (context, state, _) {
+            return CustomScrollView(
+              slivers: [
+                SliverAppBar(
+                  backgroundColor: Colors.transparent,
+                  surfaceTintColor: Colors.transparent,
+                  pinned: true,
+                  elevation: 0,
+                  expandedHeight: 140,
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                    onPressed: () => state.clear(),
                   ),
-                  onPressed: () => _shareResults(state),
-                ),
-              ],
-              flexibleSpace: FlexibleSpaceBar(
-                title: const Text(
-                  'Summary',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20,
-                  ),
-                ),
-                background: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        const Color(0xFF00D9FF).withAlpha(30),
-                        const Color(0xFF0D0D1A),
-                      ],
+                  actions: [
+                    IconButton(
+                      icon: const Icon(
+                        Icons.share_rounded,
+                        color: AppColors.cyan,
+                      ),
+                      onPressed: () => _shareResults(state),
+                    ),
+                  ],
+                  flexibleSpace: FlexibleSpaceBar(
+                    titlePadding: const EdgeInsetsDirectional.only(
+                      start: 16,
+                      bottom: 16,
+                    ),
+                    title: const Text(
+                      'Summary',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    background: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            AppColors.cyan.withAlpha(18),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-
-            // Content
-            SliverPadding(
-              padding: const EdgeInsets.all(20),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate([
-                  // Audio player card
-                  if (state.currentAudioPath != null)
-                    _buildAudioPlayerCard(state.currentAudioPath!),
-
-                  const SizedBox(height: 24),
-
-                  // Summary card
-                  if (state.summaryResult != null)
-                    _buildSummaryCard(state.summaryResult!),
-
-                  const SizedBox(height: 20),
-
-                  // Key points card
-                  if (state.summaryResult != null &&
-                      state.summaryResult!.keyPoints.isNotEmpty)
-                    _buildKeyPointsCard(state.summaryResult!.keyPoints),
-
-                  const SizedBox(height: 20),
-
-                  // Action items card
-                  if (state.summaryResult != null &&
-                      state.summaryResult!.hasActionItems)
-                    _buildActionItemsCard(state.summaryResult!.actionItems),
-
-                  const SizedBox(height: 20),
-
-                  // Transcript card
-                  if (state.transcriptionResult != null)
-                    _buildTranscriptCard(state.transcriptionResult!.text),
-
-                  const SizedBox(height: 24),
-
-                  // Metadata row
-                  _buildMetadataRow(state),
-
-                  const SizedBox(height: 100), // Bottom padding for FAB
-                ]),
-              ),
-            ),
-          ],
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
+                      if (state.currentAudioPath != null)
+                        AnimatedEntrance(
+                          delay: const Duration(milliseconds: 60),
+                          child: _buildAudioPlayerCard(state.currentAudioPath!),
+                        ),
+                      if (state.currentAudioPath != null)
+                        const SizedBox(height: 16),
+                      if (state.summaryResult != null)
+                        AnimatedEntrance(
+                          delay: const Duration(milliseconds: 120),
+                          child: _buildSummaryCard(state.summaryResult!),
+                        ),
+                      if (state.summaryResult != null)
+                        const SizedBox(height: 16),
+                      if (state.summaryResult != null &&
+                          state.summaryResult!.keyPoints.isNotEmpty)
+                        AnimatedEntrance(
+                          delay: const Duration(milliseconds: 180),
+                          child: _buildKeyPointsCard(
+                            state.summaryResult!.keyPoints,
+                          ),
+                        ),
+                      if (state.summaryResult != null &&
+                          state.summaryResult!.keyPoints.isNotEmpty)
+                        const SizedBox(height: 16),
+                      if (state.summaryResult != null &&
+                          state.summaryResult!.hasActionItems)
+                        AnimatedEntrance(
+                          delay: const Duration(milliseconds: 220),
+                          child: _buildActionItemsCard(
+                            state.summaryResult!.actionItems,
+                          ),
+                        ),
+                      if (state.summaryResult != null &&
+                          state.summaryResult!.hasActionItems)
+                        const SizedBox(height: 16),
+                      if (state.transcriptionResult != null)
+                        AnimatedEntrance(
+                          delay: const Duration(milliseconds: 260),
+                          child: _buildTranscriptCard(
+                            state.transcriptionResult!.text,
+                          ),
+                        ),
+                      const SizedBox(height: 16),
+                      AnimatedEntrance(
+                        delay: const Duration(milliseconds: 300),
+                        child: _buildMetadataRow(state),
+                      ),
+                    ]),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.read<ProcessingState>().clear(),
-        backgroundColor: const Color(0xFF00D9FF),
+        backgroundColor: AppColors.cyan,
         icon: const Icon(Icons.add_rounded, color: Colors.white),
         label: const Text(
           'New Summary',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
         ),
       ),
     );
   }
 
   Widget _buildAudioPlayerCard(String audioPath) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            const Color(0xFF00D9FF).withAlpha(25),
-            const Color(0xFF6C63FF).withAlpha(15),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF00D9FF).withAlpha(40)),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF00D9FF).withAlpha(20),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.cyan.withAlpha(24),
       child: Column(
         children: [
           Row(
             children: [
-              // Play/pause button
-              GestureDetector(
-                onTap: () => _togglePlay(audioPath),
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFF00D9FF), Color(0xFF6C63FF)],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF00D9FF).withAlpha(80),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    colors: [AppColors.cyan, AppColors.violet],
                   ),
-                  child: Icon(
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.cyan.withAlpha(40),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  onPressed: () => _togglePlay(audioPath),
+                  icon: Icon(
                     _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                     color: Colors.white,
-                    size: 32,
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Voice Note',
+                      'Voice note',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       audioPath.split('/').last,
                       style: TextStyle(
-                        color: Colors.white.withAlpha(120),
+                        color: Colors.white.withAlpha(130),
                         fontSize: 12,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -295,37 +287,19 @@ class _ResultsScreenState extends State<ResultsScreen>
                   ],
                 ),
               ),
-              // Duration
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withAlpha(15),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  _formatDuration(_duration),
-                  style: const TextStyle(
-                    color: Color(0xFF00D9FF),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+              PremiumPill(
+                icon: Icons.timelapse_rounded,
+                label: _formatDuration(_duration),
+                color: AppColors.cyan,
               ),
             ],
           ),
           const SizedBox(height: 16),
-          // Progress bar
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 6,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-              activeTrackColor: const Color(0xFF00D9FF),
-              inactiveTrackColor: Colors.white.withAlpha(30),
-              thumbColor: Colors.white,
             ),
             child: Slider(
               value: clampSliderValue(
@@ -338,7 +312,6 @@ class _ResultsScreenState extends State<ResultsScreen>
               },
             ),
           ),
-          // Time labels
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Row(
@@ -367,109 +340,124 @@ class _ResultsScreenState extends State<ResultsScreen>
   }
 
   Widget _buildSummaryCard(SummaryResult summary) {
-    return _buildCard(
-      icon: Icons.lightbulb_rounded,
-      iconColor: const Color(0xFFFFD700),
-      title: 'Summary',
-      onCopy: () => _copyToClipboard(summary.summary, 'Summary'),
-      child: Text(
-        summary.summary,
-        style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.6),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PremiumSectionHeader(
+            title: 'Summary',
+            subtitle: 'A concise readout of the note.',
+          ),
+          const SizedBox(height: 14),
+          Text(
+            summary.summary,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              height: 1.6,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildKeyPointsCard(List<String> bullets) {
-    return _buildCard(
-      icon: Icons.format_list_bulleted_rounded,
-      iconColor: const Color(0xFF00D9FF),
-      title: 'Key Points',
-      onCopy: () => _copyToClipboard(bullets.join('\n• '), 'Key points'),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
       child: Column(
-        children: bullets
-            .map(
-              (bullet) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(top: 8),
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          colors: [Color(0xFF00D9FF), Color(0xFF6C63FF)],
-                        ),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PremiumSectionHeader(
+            title: 'Key points',
+            subtitle: 'The main ideas, tightened into short bullets.',
+          ),
+          const SizedBox(height: 14),
+          ...bullets.map(
+            (bullet) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [AppColors.cyan, AppColors.violet],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        bullet,
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(220),
-                          fontSize: 15,
-                          height: 1.5,
-                        ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      bullet,
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(220),
+                        fontSize: 15,
+                        height: 1.5,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            )
-            .toList(),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildActionItemsCard(String actionItems) {
-    return _buildCard(
-      icon: Icons.check_circle_rounded,
-      iconColor: const Color(0xFF4CAF50),
-      title: 'Action Items',
-      onCopy: () => _copyToClipboard(actionItems, 'Action items'),
-      child: Text(
-        actionItems,
-        style: TextStyle(
-          color: Colors.white.withAlpha(220),
-          fontSize: 15,
-          height: 1.5,
-        ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.green.withAlpha(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const PremiumSectionHeader(
+            title: 'Action items',
+            subtitle: 'Anything that needs a follow-up or next step.',
+          ),
+          const SizedBox(height: 14),
+          Text(
+            actionItems,
+            style: TextStyle(
+              color: Colors.white.withAlpha(220),
+              fontSize: 15,
+              height: 1.55,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildTranscriptCard(String transcript) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(8),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withAlpha(15)),
-      ),
+    final wordCount = transcript.split(' ').where((w) => w.isNotEmpty).length;
+
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
       child: Column(
         children: [
-          // Header
           InkWell(
             onTap: () {
               setState(() => _transcriptExpanded = !_transcriptExpanded);
-              if (_transcriptExpanded) {
-                _animationController.forward();
-              } else {
-                _animationController.reverse();
-              }
             },
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
             child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(4),
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(10),
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
+                      shape: BoxShape.circle,
                       color: Colors.white.withAlpha(10),
-                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
                       Icons.description_rounded,
@@ -483,18 +471,18 @@ class _ResultsScreenState extends State<ResultsScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Full Transcript',
+                          'Full transcript',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                         Text(
-                          '${transcript.split(' ').where((w) => w.isNotEmpty).length} words',
+                          '$wordCount words',
                           style: TextStyle(
-                            color: Colors.white.withAlpha(100),
-                            fontSize: 13,
+                            color: Colors.white.withAlpha(110),
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -507,7 +495,7 @@ class _ResultsScreenState extends State<ResultsScreen>
                   ),
                   AnimatedRotation(
                     turns: _transcriptExpanded ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 200),
+                    duration: const Duration(milliseconds: 220),
                     child: Icon(
                       Icons.keyboard_arrow_down_rounded,
                       color: Colors.white.withAlpha(120),
@@ -517,127 +505,95 @@ class _ResultsScreenState extends State<ResultsScreen>
               ),
             ),
           ),
-          // Expandable content
           AnimatedCrossFade(
             firstChild: const SizedBox.shrink(),
-            secondChild: Container(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(80),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: SelectableText(
-                  transcript.isEmpty ? '(No transcript available)' : transcript,
-                  style: TextStyle(
-                    color: transcript.isEmpty
-                        ? Colors.white.withAlpha(100)
-                        : Colors.white.withAlpha(200),
-                    fontSize: 14,
-                    height: 1.6,
-                  ),
+            secondChild: Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                transcript,
+                style: TextStyle(
+                  color: Colors.white.withAlpha(210),
+                  fontSize: 15,
+                  height: 1.6,
                 ),
               ),
             ),
             crossFadeState: _transcriptExpanded
                 ? CrossFadeState.showSecond
                 : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 220),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCard({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required VoidCallback onCopy,
-    required Widget child,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(8),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withAlpha(15)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: iconColor.withAlpha(30),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: iconColor, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.copy_rounded, size: 20),
-                color: Colors.white.withAlpha(120),
-                onPressed: onCopy,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          child,
         ],
       ),
     );
   }
 
   Widget _buildMetadataRow(ProcessingState state) {
+    final summary = state.summaryResult;
     final transcript = state.transcriptionResult;
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _buildMetadataChip(Icons.memory_rounded, 'Gemma 4 E2B'),
+        Expanded(
+          child: PremiumSurface(
+            padding: const EdgeInsets.all(16),
+            borderRadius: BorderRadius.circular(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Transcript',
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(120),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${transcript?.text.split(' ').where((w) => w.isNotEmpty).length ?? 0} words',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(width: 12),
-        _buildMetadataChip(Icons.timer_rounded, _formatDuration(_duration)),
-        const SizedBox(width: 12),
-        _buildMetadataChip(
-          Icons.text_fields_rounded,
-          '${transcript?.text.split(' ').where((w) => w.isNotEmpty).length ?? 0} words',
+        Expanded(
+          child: PremiumSurface(
+            padding: const EdgeInsets.all(16),
+            borderRadius: BorderRadius.circular(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Summary',
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(120),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  summary?.keyPoints.length.toString() ?? '0',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
-    );
-  }
-
-  Widget _buildMetadataChip(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(8),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: Colors.white.withAlpha(120)),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(color: Colors.white.withAlpha(150), fontSize: 12),
-          ),
-        ],
-      ),
     );
   }
 

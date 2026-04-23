@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+
 import '../services/summary_storage_service.dart';
+import '../ui/premium_ui.dart';
 import 'note_detail_screen.dart';
 
-/// Screen to view history of processed voice notes
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
 
@@ -12,11 +13,11 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   final SummaryStorageService _storageService = SummaryStorageService();
+  final TextEditingController _searchController = TextEditingController();
   List<SummaryRecord> _records = [];
   List<SummaryRecord> _filteredRecords = [];
   bool _isLoading = true;
   bool _isSearching = false;
-  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -24,8 +25,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _loadRecords();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadRecords() async {
     final records = await _storageService.getAllRecords();
+    if (!mounted) return;
     setState(() {
       _records = records;
       _filteredRecords = records;
@@ -35,9 +43,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   void _filterRecords(String query) {
     if (query.isEmpty) {
-      setState(() {
-        _filteredRecords = _records;
-      });
+      setState(() => _filteredRecords = _records);
       return;
     }
 
@@ -54,9 +60,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D1A),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: _isSearching
             ? TextField(
                 controller: _searchController,
@@ -64,22 +71,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
                   hintText: 'Search notes...',
-                  hintStyle: TextStyle(color: Colors.grey),
                   border: InputBorder.none,
                 ),
                 onChanged: _filterRecords,
               )
-            : const Text(
-                'History',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-        iconTheme: const IconThemeData(color: Colors.white),
+            : const Text('History'),
         actions: [
           IconButton(
-            icon: Icon(_isSearching ? Icons.close : Icons.search),
+            icon: Icon(
+              _isSearching ? Icons.close_rounded : Icons.search_rounded,
+            ),
             onPressed: () {
               setState(() {
                 if (_isSearching) {
@@ -94,79 +95,52 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
           if (_records.isNotEmpty && !_isSearching)
             IconButton(
-              icon: const Icon(Icons.delete_sweep),
-              onPressed: _confirmClearAll,
+              icon: const Icon(Icons.delete_sweep_rounded),
               tooltip: 'Clear all history',
+              onPressed: _confirmClearAll,
             ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF00D9FF)),
-            )
-          : _records.isEmpty
-          ? _buildEmptyState()
-          : _filteredRecords.isEmpty
-          ? _buildNoSearchResults()
-          : _buildHistoryList(),
-    );
-  }
-
-  Widget _buildNoSearchResults() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.search_off, size: 60, color: Colors.white.withAlpha(50)),
-          const SizedBox(height: 16),
-          Text(
-            'No matching notes found',
-            style: TextStyle(color: Colors.white.withAlpha(150), fontSize: 16),
-          ),
-        ],
+      body: PremiumBackdrop(
+        child: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: AppColors.cyan),
+              )
+            : _records.isEmpty
+            ? const PremiumEmptyState(
+                icon: Icons.history_rounded,
+                title: 'No summaries yet',
+                message:
+                    'Process a voice note to see it appear in your archive.',
+              )
+            : _filteredRecords.isEmpty
+            ? const PremiumEmptyState(
+                icon: Icons.search_off_rounded,
+                title: 'No matching notes',
+                message:
+                    'Try a different file name, summary phrase, or transcript word.',
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                itemCount: _filteredRecords.length,
+                itemBuilder: (context, index) {
+                  final record = _filteredRecords[index];
+                  return AnimatedEntrance(
+                    delay: Duration(milliseconds: 30 * index),
+                    child: _buildRecordCard(record),
+                  );
+                },
+              ),
       ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.history, size: 80, color: Colors.white.withAlpha(50)),
-          const SizedBox(height: 16),
-          Text(
-            'No summaries yet',
-            style: TextStyle(color: Colors.white.withAlpha(150), fontSize: 18),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Process a voice note to see it here',
-            style: TextStyle(color: Colors.white.withAlpha(100), fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHistoryList() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _filteredRecords.length,
-      itemBuilder: (context, index) {
-        final record = _filteredRecords[index];
-        return _buildRecordCard(record);
-      },
     );
   }
 
   Widget _buildRecordCard(SummaryRecord record) {
-    return Card(
-      color: const Color(0xFF1A1A2E),
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: PremiumSurface(
+        borderRadius: BorderRadius.circular(24),
         onTap: () {
           Navigator.push(
             context,
@@ -175,108 +149,97 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ),
           );
         },
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header row
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00D9FF).withAlpha(30),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(
-                      Icons.article_outlined,
-                      color: Color(0xFF00D9FF),
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          record.sourceFileName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          record.formattedDate,
-                          style: TextStyle(
-                            color: Colors.white.withAlpha(100),
-                            fontSize: 12,
-                          ),
-                        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.cyan.withAlpha(20),
+                        AppColors.violet.withAlpha(14),
                       ],
                     ),
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.delete_outline,
-                      color: Colors.red.withAlpha(180),
-                    ),
-                    onPressed: () => _confirmDelete(record),
+                  child: const Icon(
+                    Icons.article_outlined,
+                    color: AppColors.cyan,
+                    size: 22,
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Summary preview
-              Text(
-                record.summary.isEmpty
-                    ? record.transcriptPreview
-                    : record.summary,
-                style: TextStyle(
-                  color: Colors.white.withAlpha(200),
-                  fontSize: 13,
                 ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 12),
-              // Model chips
-              Wrap(
-                spacing: 8,
-                children: [
-                  _buildChip(
-                    '${record.transcriptLength} chars',
-                    Icons.text_fields,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        record.sourceFileName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        record.formattedDate,
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(120),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.red.withAlpha(210),
+                  ),
+                  onPressed: () => _confirmDelete(record),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text(
+              record.summary.isEmpty
+                  ? record.transcriptPreview
+                  : record.summary,
+              style: TextStyle(
+                color: Colors.white.withAlpha(210),
+                fontSize: 14,
+                height: 1.5,
               ),
-            ],
-          ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                PremiumPill(
+                  icon: Icons.text_fields_rounded,
+                  label: '${record.transcriptLength} chars',
+                  color: AppColors.cyan,
+                ),
+                PremiumPill(
+                  icon: Icons.schedule_rounded,
+                  label: record.formattedDate.split(' ').first,
+                  color: AppColors.violet,
+                ),
+              ],
+            ),
+          ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildChip(String label, IconData icon) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(10),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: Colors.white.withAlpha(120)),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(color: Colors.white.withAlpha(120), fontSize: 11),
-          ),
-        ],
       ),
     );
   }
@@ -285,9 +248,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: AppColors.surfaceElevated,
         title: const Text(
-          'Delete Record?',
+          'Delete record?',
           style: TextStyle(color: Colors.white),
         ),
         content: Text(
@@ -305,7 +268,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               await _storageService.deleteRecord(record.id);
               _loadRecords();
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: const Text('Delete', style: TextStyle(color: AppColors.red)),
           ),
         ],
       ),
@@ -316,9 +279,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: AppColors.surfaceElevated,
         title: const Text(
-          'Clear All History?',
+          'Clear all history?',
           style: TextStyle(color: Colors.white),
         ),
         content: Text(
@@ -336,7 +299,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
               await _storageService.clearAll();
               _loadRecords();
             },
-            child: const Text('Clear All', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Clear all',
+              style: TextStyle(color: AppColors.red),
+            ),
           ),
         ],
       ),

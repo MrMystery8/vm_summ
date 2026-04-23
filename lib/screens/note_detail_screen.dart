@@ -1,11 +1,13 @@
 import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import '../services/summary_storage_service.dart';
+import 'package:provider/provider.dart';
 
 import '../providers/processing_state.dart';
+import '../services/summary_storage_service.dart';
+import '../ui/premium_ui.dart';
 import '../utils/slider_bounds.dart';
 
 class NoteDetailScreen extends StatefulWidget {
@@ -19,7 +21,7 @@ class NoteDetailScreen extends StatefulWidget {
 
 class _NoteDetailScreenState extends State<NoteDetailScreen>
     with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+  late final TabController _tabController;
   final AudioPlayer _audioPlayer = AudioPlayer();
 
   bool _isPlaying = false;
@@ -27,7 +29,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
   Duration _position = Duration.zero;
   bool _audioFileExists = false;
 
-  // Chat state
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = [];
@@ -39,48 +40,37 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
     _tabController = TabController(length: 3, vsync: this);
     _checkAudioFile();
     _setupAudioListeners();
-
-    // Add initial system message
     _messages.add(
-      ChatMessage(text: "Ask me anything about this note!", isUser: false),
+      ChatMessage(text: 'Ask me anything about this note!', isUser: false),
     );
   }
 
   Future<void> _checkAudioFile() async {
-    if (widget.record.sourceFilePath != null) {
-      final file = File(widget.record.sourceFilePath!);
-      if (await file.exists()) {
-        setState(() {
-          _audioFileExists = true;
-        });
-        await _audioPlayer.setSourceDeviceFile(widget.record.sourceFilePath!);
-      }
+    if (widget.record.sourceFilePath == null) return;
+    final file = File(widget.record.sourceFilePath!);
+    if (await file.exists()) {
+      if (!mounted) return;
+      setState(() => _audioFileExists = true);
+      await _audioPlayer.setSourceDeviceFile(widget.record.sourceFilePath!);
     }
   }
 
   void _setupAudioListeners() {
     _audioPlayer.onPlayerStateChanged.listen((state) {
-      if (mounted) {
-        setState(() {
-          _isPlaying = state == PlayerState.playing;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _isPlaying = state == PlayerState.playing;
+      });
     });
 
     _audioPlayer.onDurationChanged.listen((newDuration) {
-      if (mounted) {
-        setState(() {
-          _duration = newDuration;
-        });
-      }
+      if (!mounted) return;
+      setState(() => _duration = newDuration);
     });
 
     _audioPlayer.onPositionChanged.listen((newPosition) {
-      if (mounted) {
-        setState(() {
-          _position = newPosition;
-        });
-      }
+      if (!mounted) return;
+      setState(() => _position = newPosition);
     });
   }
 
@@ -112,44 +102,38 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
       }
 
       final service = processingState.gemmaService;
-
-      // Use streaming API
       final stream = service.chatWithTranscriptStream(
         widget.record.transcript,
         text,
       );
 
-      String accumulatedResponse = "";
+      String accumulatedResponse = '';
       bool hasStarted = false;
 
       await for (final chunk in stream) {
         accumulatedResponse += chunk;
+        if (!mounted) return;
 
-        if (mounted) {
-          setState(() {
-            if (!hasStarted) {
-              _isChatLoading = false;
-              _messages.add(ChatMessage(text: "", isUser: false));
-              hasStarted = true;
-            }
+        setState(() {
+          if (!hasStarted) {
+            _isChatLoading = false;
+            _messages.add(ChatMessage(text: '', isUser: false));
+            hasStarted = true;
+          }
 
-            // Update the last message (the AI response)
-            if (_messages.isNotEmpty && !_messages.last.isUser) {
-              _messages.removeLast();
-            }
-            _messages.add(
-              ChatMessage(text: accumulatedResponse, isUser: false),
-            );
-          });
-          _scrollToBottom();
-        }
+          if (_messages.isNotEmpty && !_messages.last.isUser) {
+            _messages.removeLast();
+          }
+          _messages.add(ChatMessage(text: accumulatedResponse, isUser: false));
+        });
+        _scrollToBottom();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isChatLoading = false;
           _messages.add(
-            ChatMessage(text: "Error: $e", isUser: false, isError: true),
+            ChatMessage(text: 'Error: $e', isUser: false, isError: true),
           );
         });
       }
@@ -161,8 +145,8 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
         );
       }
     });
@@ -174,127 +158,151 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
     return '$minutes:$seconds';
   }
 
+  Future<void> _togglePlay(String? audioPath) async {
+    if (audioPath == null) return;
+
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+      if (mounted) setState(() => _isPlaying = false);
+    } else {
+      await _audioPlayer.play(DeviceFileSource(audioPath));
+      if (mounted) setState(() => _isPlaying = true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0D1A),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: Text(
           widget.record.sourceFileName,
-          style: const TextStyle(color: Colors.white, fontSize: 16),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 16),
         ),
-        iconTheme: const IconThemeData(color: Colors.white),
         bottom: TabBar(
           controller: _tabController,
-          labelColor: const Color(0xFF00D9FF),
-          unselectedLabelColor: Colors.white.withAlpha(100),
-          indicatorColor: const Color(0xFF00D9FF),
           tabs: const [
-            Tab(text: "Overview"),
-            Tab(text: "Transcript"),
-            Tab(text: "Chat"),
+            Tab(text: 'Overview'),
+            Tab(text: 'Transcript'),
+            Tab(text: 'Chat'),
           ],
         ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _buildOverviewTab(),
-                _buildTranscriptTab(),
-                _buildChatTab(),
-              ],
+      body: PremiumBackdrop(
+        child: Column(
+          children: [
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildOverviewTab(),
+                  _buildTranscriptTab(),
+                  _buildChatTab(),
+                ],
+              ),
             ),
-          ),
-
-          // Audio Player Control Bar (if audio exists)
-          if (_audioFileExists) _buildAudioPlayerBar(),
-        ],
+            if (_audioFileExists) _buildAudioPlayerBar(),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildAudioPlayerBar() {
-    return Container(
-      color: const Color(0xFF1A1A2E),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    return PremiumSurface(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      borderRadius: BorderRadius.circular(26),
+      borderColor: AppColors.cyan.withAlpha(24),
       child: SafeArea(
         top: false,
         child: Column(
           children: [
             Row(
               children: [
-                IconButton(
-                  icon: Icon(
-                    _isPlaying
-                        ? Icons.pause_circle_filled
-                        : Icons.play_circle_filled,
-                    color: const Color(0xFF00D9FF),
-                    size: 48,
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      colors: [AppColors.cyan, AppColors.violet],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.cyan.withAlpha(40),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
                   ),
-                  onPressed: () {
-                    if (_isPlaying) {
-                      _audioPlayer.pause();
-                    } else {
-                      _audioPlayer.resume();
-                    }
-                  },
+                  child: IconButton(
+                    icon: Icon(
+                      _isPlaying
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                      color: Colors.white,
+                    ),
+                    onPressed: () {
+                      if (_isPlaying) {
+                        _audioPlayer.pause();
+                      } else {
+                        _audioPlayer.resume();
+                      }
+                    },
+                  ),
                 ),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          activeTrackColor: const Color(0xFF00D9FF),
-                          inactiveTrackColor: Colors.white.withAlpha(50),
-                          thumbColor: Colors.white,
-                          trackHeight: 4,
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 6,
-                          ),
-                        ),
-                        child: Slider(
-                          value: clampSliderValue(
-                            _position.inMilliseconds.toDouble(),
-                            sliderMaxFromDuration(_duration),
-                          ),
-                          max: sliderMaxFromDuration(_duration),
-                          onChanged: (value) {
-                            _audioPlayer.seek(
-                              Duration(milliseconds: value.toInt()),
-                            );
-                          },
+                      const Text(
+                        'Voice note',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              _formatDuration(_position),
-                              style: TextStyle(
-                                color: Colors.white.withAlpha(150),
-                                fontSize: 12,
-                              ),
-                            ),
-                            Text(
-                              _formatDuration(_duration),
-                              style: TextStyle(
-                                color: Colors.white.withAlpha(150),
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.record.sourceFileName,
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(130),
+                          fontSize: 12,
                         ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
+                PremiumPill(
+                  icon: Icons.timelapse_rounded,
+                  label: _formatDuration(_duration),
+                  color: AppColors.cyan,
+                ),
               ],
+            ),
+            const SizedBox(height: 12),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 5,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              ),
+              child: Slider(
+                value: clampSliderValue(
+                  _position.inMilliseconds.toDouble(),
+                  sliderMaxFromDuration(_duration),
+                ),
+                max: sliderMaxFromDuration(_duration),
+                onChanged: (value) {
+                  _audioPlayer.seek(Duration(milliseconds: value.toInt()));
+                },
+              ),
             ),
           ],
         ),
@@ -304,84 +312,193 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
 
   Widget _buildOverviewTab() {
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
-        _buildSectionTitle('Summary'),
-        _buildCard(
-          child: Text(
-            widget.record.summary,
-            style: TextStyle(
-              color: Colors.white.withAlpha(220),
-              fontSize: 15,
-              height: 1.5,
+        AnimatedEntrance(
+          delay: const Duration(milliseconds: 50),
+          child: _buildOverviewHeader(),
+        ),
+        const SizedBox(height: 16),
+        AnimatedEntrance(
+          delay: const Duration(milliseconds: 110),
+          child: _buildOverviewCard(
+            title: 'Summary',
+            child: Text(
+              widget.record.summary,
+              style: TextStyle(
+                color: Colors.white.withAlpha(220),
+                fontSize: 15,
+                height: 1.55,
+              ),
             ),
           ),
         ),
-
-        const SizedBox(height: 24),
-        _buildSectionTitle('Key Points'),
-        _buildCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: widget.record.keyPoints
-                .map(
-                  (point) => Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "• ",
-                          style: TextStyle(
-                            color: Color(0xFF00D9FF),
-                            fontSize: 16,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            point,
-                            style: TextStyle(
-                              color: Colors.white.withAlpha(200),
-                              fontSize: 15,
+        const SizedBox(height: 16),
+        AnimatedEntrance(
+          delay: const Duration(milliseconds: 160),
+          child: _buildOverviewCard(
+            title: 'Key points',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: widget.record.keyPoints
+                  .map(
+                    (point) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.only(top: 7),
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: [AppColors.cyan, AppColors.violet],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              point,
+                              style: TextStyle(
+                                color: Colors.white.withAlpha(210),
+                                fontSize: 15,
+                                height: 1.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                )
-                .toList(),
+                  )
+                  .toList(),
+            ),
           ),
         ),
-
-        const SizedBox(height: 24),
-        _buildSectionTitle('Action Items'),
-        _buildCard(
-          child: Text(
-            widget.record.actionItems,
-            style: TextStyle(color: Colors.white.withAlpha(200), fontSize: 15),
+        const SizedBox(height: 16),
+        AnimatedEntrance(
+          delay: const Duration(milliseconds: 210),
+          child: _buildOverviewCard(
+            title: 'Action items',
+            child: Text(
+              widget.record.actionItems,
+              style: TextStyle(
+                color: Colors.white.withAlpha(210),
+                fontSize: 15,
+                height: 1.5,
+              ),
+            ),
           ),
         ),
-
-        const SizedBox(height: 100), // Space for audio player
       ],
+    );
+  }
+
+  Widget _buildOverviewHeader() {
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.cyan.withAlpha(24),
+      child: Row(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.cyan.withAlpha(18),
+                  AppColors.violet.withAlpha(12),
+                ],
+              ),
+            ),
+            child: const Icon(Icons.article_outlined, color: AppColors.cyan),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.record.formattedDate,
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(120),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  widget.record.summary.isEmpty
+                      ? 'Transcript-first archive entry'
+                      : widget.record.summary,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverviewCard({required String title, required Widget child}) {
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PremiumSectionHeader(
+            title: title,
+            subtitle: title == 'Summary'
+                ? 'A clean readout of the model output.'
+                : title == 'Key points'
+                ? 'The main ideas distilled into short bullets.'
+                : 'Next steps and follow-up actions.',
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
     );
   }
 
   Widget _buildTranscriptTab() {
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       children: [
-        Text(
-          widget.record.transcript,
-          style: TextStyle(
-            color: Colors.white.withAlpha(200),
-            fontSize: 16,
-            height: 1.6,
-            fontFamily: 'Roboto',
+        AnimatedEntrance(
+          delay: const Duration(milliseconds: 80),
+          child: PremiumSurface(
+            borderRadius: BorderRadius.circular(28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const PremiumSectionHeader(
+                  title: 'Transcript',
+                  subtitle: 'The raw note, preserved for reading and search.',
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  widget.record.transcript,
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(210),
+                    fontSize: 15,
+                    height: 1.6,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 100),
       ],
     );
   }
@@ -392,22 +509,21 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
             itemCount: _messages.length,
             itemBuilder: (context, index) {
-              final msg = _messages[index];
-              return _ChatMessageWidget(message: msg);
+              return _ChatMessageWidget(message: _messages[index]);
             },
           ),
         ),
         if (_isChatLoading)
           const Padding(
-            padding: EdgeInsets.all(8.0),
-            child: CircularProgressIndicator(color: Color(0xFF00D9FF)),
+            padding: EdgeInsets.only(bottom: 8.0),
+            child: CircularProgressIndicator(color: AppColors.cyan),
           ),
-        Container(
-          padding: const EdgeInsets.all(16),
-          color: const Color(0xFF1A1A2E),
+        PremiumSurface(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          borderRadius: BorderRadius.circular(24),
           child: Row(
             children: [
               Expanded(
@@ -416,15 +532,11 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     hintText: 'Ask about this note...',
-                    hintStyle: TextStyle(color: Colors.white.withAlpha(100)),
+                    border: InputBorder.none,
                     filled: true,
-                    fillColor: Colors.white.withAlpha(10),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
-                    ),
+                    fillColor: Colors.white.withAlpha(8),
                     contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 20,
+                      horizontal: 18,
                       vertical: 12,
                     ),
                   ),
@@ -432,48 +544,24 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                 ),
               ),
               const SizedBox(width: 12),
-              CircleAvatar(
-                backgroundColor: const Color(0xFF00D9FF),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [AppColors.cyan, AppColors.violet],
+                  ),
+                ),
                 child: IconButton(
-                  icon: const Icon(Icons.send, color: Colors.white),
+                  icon: const Icon(Icons.send_rounded, color: Colors.white),
                   onPressed: _sendMessage,
                 ),
               ),
             ],
           ),
         ),
-        // Spacer for audio player if visible?
-        // Actually TabBarView is inside the body, and audio player is below it in Column.
-        // So no overlap issue here strictly speaking, but good to check layout.
       ],
-    );
-  }
-
-  Widget _buildSectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          color: Color(0xFF00D9FF),
-          fontSize: 13,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.2,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCard({required Widget child}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withAlpha(10)),
-      ),
-      child: child,
     );
   }
 }
@@ -494,8 +582,12 @@ class _ChatMessageWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message.isUser;
+    final bubbleColor = isUser
+        ? AppColors.cyan.withAlpha(18)
+        : AppColors.surfaceElevated;
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         mainAxisAlignment: isUser
             ? MainAxisAlignment.end
@@ -504,55 +596,57 @@ class _ChatMessageWidget extends StatelessWidget {
         children: [
           if (!isUser)
             const CircleAvatar(
-              backgroundColor: Color(0xFF6C63FF),
+              backgroundColor: AppColors.violet,
               radius: 16,
-              child: Icon(Icons.auto_awesome, size: 16, color: Colors.white),
+              child: Icon(
+                Icons.auto_awesome_rounded,
+                size: 16,
+                color: Colors.white,
+              ),
             ),
-          const SizedBox(width: 8),
+          if (!isUser) const SizedBox(width: 10),
           Flexible(
             child: Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: isUser
-                    ? const Color(0xFF00D9FF).withAlpha(40)
-                    : const Color(0xFF1A1A2E),
+                color: bubbleColor,
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
+                  topLeft: const Radius.circular(18),
+                  topRight: const Radius.circular(18),
+                  bottomLeft: Radius.circular(isUser ? 18 : 6),
+                  bottomRight: Radius.circular(isUser ? 6 : 18),
                 ),
                 border: Border.all(
                   color: message.isError
-                      ? Colors.red.withAlpha(100)
+                      ? AppColors.red.withAlpha(120)
                       : (isUser
-                            ? const Color(0xFF00D9FF).withAlpha(60)
-                            : Colors.white.withAlpha(20)),
+                            ? AppColors.cyan.withAlpha(40)
+                            : Colors.white.withAlpha(12)),
                 ),
               ),
               child: isUser
                   ? Text(
                       message.text,
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: Colors.white, height: 1.45),
                     )
                   : MarkdownBody(
                       data: message.text,
                       styleSheet: MarkdownStyleSheet(
-                        p: const TextStyle(color: Colors.white),
+                        p: const TextStyle(color: Colors.white, height: 1.5),
                         strong: const TextStyle(
                           color: Colors.white,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
             ),
           ),
-          const SizedBox(width: 8),
+          if (isUser) const SizedBox(width: 10),
           if (isUser)
             const CircleAvatar(
-              backgroundColor: Color(0xFF00D9FF),
+              backgroundColor: AppColors.cyan,
               radius: 16,
-              child: Icon(Icons.person, size: 16, color: Colors.white),
+              child: Icon(Icons.person_rounded, size: 16, color: Colors.white),
             ),
         ],
       ),

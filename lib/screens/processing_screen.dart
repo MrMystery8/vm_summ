@@ -1,11 +1,12 @@
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:audioplayers/audioplayers.dart';
-import '../providers/processing_state.dart';
-import 'queue_screen.dart';
-import '../utils/slider_bounds.dart';
 
-/// Enhanced processing screen with audio player and model status
+import '../providers/processing_state.dart';
+import '../ui/premium_ui.dart';
+import '../utils/slider_bounds.dart';
+import 'queue_screen.dart';
+
 class ProcessingScreen extends StatefulWidget {
   const ProcessingScreen({super.key});
 
@@ -27,14 +28,17 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
 
   void _setupAudioPlayer() {
     _audioPlayer.onDurationChanged.listen((d) {
+      if (!mounted) return;
       setState(() => _duration = d);
     });
 
     _audioPlayer.onPositionChanged.listen((p) {
+      if (!mounted) return;
       setState(() => _position = p);
     });
 
     _audioPlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
       setState(() {
         _isPlaying = false;
         _position = Duration.zero;
@@ -47,10 +51,10 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
 
     if (_isPlaying) {
       await _audioPlayer.pause();
-      setState(() => _isPlaying = false);
+      if (mounted) setState(() => _isPlaying = false);
     } else {
       await _audioPlayer.play(DeviceFileSource(audioPath));
-      setState(() => _isPlaying = true);
+      if (mounted) setState(() => _isPlaying = true);
     }
   }
 
@@ -63,19 +67,16 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Processing', style: TextStyle(color: Colors.white)),
+        title: const Text('Processing'),
         leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white),
-          onPressed: () {
-            context.read<ProcessingState>().clear();
-          },
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => context.read<ProcessingState>().clear(),
         ),
         actions: [
-          // Queue button with badge
           Consumer<ProcessingState>(
             builder: (context, state, _) {
               final queueCount = state.queueCount;
@@ -83,7 +84,7 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                 icon: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    const Icon(Icons.queue_music, color: Colors.white),
+                    const Icon(Icons.queue_music_rounded),
                     if (queueCount > 0)
                       Positioned(
                         right: -6,
@@ -91,7 +92,7 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(4),
                           decoration: const BoxDecoration(
-                            color: Color(0xFF00D9FF),
+                            color: AppColors.cyan,
                             shape: BoxShape.circle,
                           ),
                           child: Text(
@@ -99,7 +100,7 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 10,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
@@ -118,41 +119,60 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
               );
             },
           ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: SafeArea(
-        child: Consumer<ProcessingState>(
-          builder: (context, state, _) => SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Model status card
-                _buildModelStatusCard(state),
-                const SizedBox(height: 20),
-
-                // Audio player card (if file available)
-                if (state.currentAudioPath != null)
-                  _buildAudioPlayerCard(state.currentAudioPath!),
-
-                const SizedBox(height: 20),
-
-                // Processing steps
-                _buildProcessingSteps(state),
-
-                const SizedBox(height: 20),
-
-                // Error display
-                if (state.errorMessage != null) _buildErrorCard(state),
-
-                // Transcript display (if available)
-                if (state.transcriptionResult != null)
-                  _buildTranscriptCard(state),
-
-                // Summary display (if available)
-                if (state.summaryResult != null) _buildSummaryCard(state),
-              ],
-            ),
+      body: PremiumBackdrop(
+        child: SafeArea(
+          child: Consumer<ProcessingState>(
+            builder: (context, state, _) {
+              return SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AnimatedEntrance(
+                      delay: const Duration(milliseconds: 70),
+                      child: _buildModelStatusCard(state),
+                    ),
+                    const SizedBox(height: 16),
+                    if (state.currentAudioPath != null) ...[
+                      AnimatedEntrance(
+                        delay: const Duration(milliseconds: 130),
+                        child: _buildAudioPlayerCard(state.currentAudioPath!),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    AnimatedEntrance(
+                      delay: const Duration(milliseconds: 190),
+                      child: _buildProcessingSteps(state),
+                    ),
+                    if (state.errorMessage != null) ...[
+                      const SizedBox(height: 16),
+                      AnimatedEntrance(
+                        delay: const Duration(milliseconds: 240),
+                        child: _buildErrorCard(state),
+                      ),
+                    ],
+                    if (state.transcriptionResult != null) ...[
+                      const SizedBox(height: 16),
+                      AnimatedEntrance(
+                        delay: const Duration(milliseconds: 280),
+                        child: _buildTranscriptCard(state),
+                      ),
+                    ],
+                    if (state.summaryResult != null) ...[
+                      const SizedBox(height: 16),
+                      AnimatedEntrance(
+                        delay: const Duration(milliseconds: 320),
+                        child: _buildSummaryCard(state),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -160,83 +180,101 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   }
 
   Widget _buildModelStatusCard(ProcessingState state) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(10),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withAlpha(20)),
-      ),
+    final isReady = state.modelStatus == ModelStatus.ready;
+    final isCopying = state.modelStatus == ModelStatus.copying;
+    final accent = isReady ? AppColors.green : AppColors.cyan;
+
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: accent.withAlpha(28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                state.modelStatus == ModelStatus.ready
-                    ? Icons.check_circle
-                    : state.modelStatus == ModelStatus.copying
-                    ? Icons.downloading
-                    : Icons.warning,
-                color: state.modelStatus == ModelStatus.ready
-                    ? Colors.green
-                    : state.modelStatus == ModelStatus.copying
-                    ? Colors.orange
-                    : Colors.red,
-                size: 24,
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accent.withAlpha(18),
+                ),
+                child: Icon(
+                  isReady ? Icons.check_rounded : Icons.memory_rounded,
+                  color: accent,
+                ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Gemma 4 E2B Model',
+                      'Gemma model',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
+                    const SizedBox(height: 4),
                     Text(
                       state.modelStatusMessage,
                       style: TextStyle(
-                        color: Colors.white.withAlpha(180),
+                        color: Colors.white.withAlpha(145),
                         fontSize: 13,
+                        height: 1.35,
                       ),
                     ),
                   ],
                 ),
               ),
               if (state.modelStatus == ModelStatus.notDownloaded)
-                ElevatedButton(
-                  onPressed: () => state.downloadModel(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00D9FF),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                  ),
-                  child: const Text('Download'),
+                PremiumPill(
+                  icon: Icons.download_rounded,
+                  label: 'Download',
+                  color: accent,
+                )
+              else if (isCopying)
+                const PremiumPill(
+                  icon: Icons.downloading_rounded,
+                  label: 'Syncing',
+                  color: AppColors.amber,
+                )
+              else
+                const PremiumPill(
+                  icon: Icons.check_rounded,
+                  label: 'Ready',
+                  color: AppColors.green,
                 ),
             ],
           ),
-          if (state.modelStatus == ModelStatus.copying) ...[
-            const SizedBox(height: 12),
-            LinearProgressIndicator(
-              value: state.modelDownloadProgress,
-              backgroundColor: Colors.white.withAlpha(30),
-              valueColor: const AlwaysStoppedAnimation<Color>(
-                Color(0xFF00D9FF),
+          if (state.modelStatus == ModelStatus.notDownloaded) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => state.downloadModel(),
+                child: const Text('Download Model'),
               ),
             ),
-            const SizedBox(height: 4),
+          ],
+          if (isCopying) ...[
+            const SizedBox(height: 14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: state.modelDownloadProgress,
+                minHeight: 8,
+                backgroundColor: Colors.white.withAlpha(20),
+                valueColor: const AlwaysStoppedAnimation(AppColors.cyan),
+              ),
+            ),
+            const SizedBox(height: 8),
             Text(
               '${(state.modelDownloadProgress * 100).toInt()}%',
               style: TextStyle(
-                color: Colors.white.withAlpha(150),
+                color: Colors.white.withAlpha(120),
                 fontSize: 12,
               ),
             ),
@@ -247,36 +285,47 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   }
 
   Widget _buildAudioPlayerCard(String audioPath) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF00D9FF).withAlpha(20),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF00D9FF).withAlpha(50)),
-      ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.cyan.withAlpha(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.audio_file, color: Color(0xFF00D9FF), size: 24),
-              const SizedBox(width: 12),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.cyan.withAlpha(18),
+                ),
+                child: IconButton(
+                  onPressed: () => _togglePlay(audioPath),
+                  icon: Icon(
+                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    color: AppColors.cyan,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Voice Note',
+                      'Voice note',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
+                    const SizedBox(height: 4),
                     Text(
                       audioPath.split('/').last,
                       style: TextStyle(
-                        color: Colors.white.withAlpha(150),
+                        color: Colors.white.withAlpha(130),
                         fontSize: 12,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -284,23 +333,20 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                   ],
                 ),
               ),
-              // Play/Pause button
-              IconButton(
-                onPressed: () => _togglePlay(audioPath),
-                icon: Icon(
-                  _isPlaying ? Icons.pause_circle : Icons.play_circle,
-                  color: const Color(0xFF00D9FF),
-                  size: 48,
-                ),
+              const SizedBox(width: 12),
+              PremiumPill(
+                icon: Icons.timelapse_rounded,
+                label: _formatDuration(_duration),
+                color: AppColors.cyan,
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          // Progress bar
+          const SizedBox(height: 16),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              trackHeight: 4,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              trackHeight: 6,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
             ),
             child: Slider(
               value: clampSliderValue(
@@ -308,32 +354,32 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                 sliderMaxFromDuration(_duration),
               ),
               max: sliderMaxFromDuration(_duration),
-              activeColor: const Color(0xFF00D9FF),
-              inactiveColor: Colors.white.withAlpha(30),
               onChanged: (value) {
                 _audioPlayer.seek(Duration(milliseconds: value.toInt()));
               },
             ),
           ),
-          // Time display
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                _formatDuration(_position),
-                style: TextStyle(
-                  color: Colors.white.withAlpha(150),
-                  fontSize: 12,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _formatDuration(_position),
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(120),
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-              Text(
-                _formatDuration(_duration),
-                style: TextStyle(
-                  color: Colors.white.withAlpha(150),
-                  fontSize: 12,
+                Text(
+                  _formatDuration(_duration),
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(120),
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -345,35 +391,31 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
       _StepData(
         'Converting Audio',
         ProcessingStatus.convertingAudio,
-        Icons.transform,
+        Icons.transform_rounded,
       ),
       _StepData(
         'Initializing Gemma',
         ProcessingStatus.initializingModel,
-        Icons.memory,
+        Icons.memory_rounded,
       ),
       _StepData(
         'Processing Audio',
         ProcessingStatus.processing,
-        Icons.auto_awesome,
+        Icons.auto_awesome_rounded,
       ),
     ];
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(10),
-        borderRadius: BorderRadius.circular(16),
-      ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Processing Steps',
+            'Processing steps',
             style: TextStyle(
               color: Colors.white,
               fontSize: 16,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 16),
@@ -392,12 +434,12 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: isComplete
-                          ? Colors.green
+                          ? AppColors.green
                           : isActive
-                          ? const Color(0xFF00D9FF)
+                          ? AppColors.cyan
                           : isFailed
-                          ? Colors.red.withAlpha(50)
-                          : Colors.white.withAlpha(20),
+                          ? AppColors.red.withAlpha(40)
+                          : Colors.white.withAlpha(18),
                     ),
                     child: isActive
                         ? const Padding(
@@ -410,24 +452,26 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
                             ),
                           )
                         : Icon(
-                            isComplete ? Icons.check : step.icon,
+                            isComplete ? Icons.check_rounded : step.icon,
                             color: isComplete || isActive
                                 ? Colors.white
-                                : Colors.white.withAlpha(80),
+                                : Colors.white.withAlpha(90),
                             size: 18,
                           ),
                   ),
                   const SizedBox(width: 16),
-                  Text(
-                    step.label,
-                    style: TextStyle(
-                      color: isComplete || isActive
-                          ? Colors.white
-                          : Colors.white.withAlpha(80),
-                      fontSize: 15,
-                      fontWeight: isActive
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                  Expanded(
+                    child: Text(
+                      step.label,
+                      style: TextStyle(
+                        color: isComplete || isActive
+                            ? Colors.white
+                            : Colors.white.withAlpha(90),
+                        fontSize: 15,
+                        fontWeight: isActive
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
                     ),
                   ),
                 ],
@@ -440,27 +484,28 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   }
 
   Widget _buildErrorCard(ProcessingState state) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.red.withAlpha(30),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.red.withAlpha(100)),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.red.withAlpha(36),
+      gradient: LinearGradient(
+        colors: [
+          AppColors.red.withAlpha(18),
+          AppColors.surfaceElevated.withAlpha(255),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.error_outline, color: Colors.red, size: 24),
+              const Icon(Icons.error_outline_rounded, color: AppColors.red),
               const SizedBox(width: 12),
               const Text(
                 'Error',
                 style: TextStyle(
-                  color: Colors.red,
+                  color: Colors.white,
                   fontSize: 16,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],
@@ -468,12 +513,11 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
           const SizedBox(height: 12),
           Text(
             state.errorMessage ?? 'Unknown error',
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+            style: const TextStyle(color: Colors.white),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           ElevatedButton(
             onPressed: () => state.clear(),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Try Again'),
           ),
         ],
@@ -484,57 +528,31 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   Widget _buildTranscriptCard(ProcessingState state) {
     final transcript = state.transcriptionResult?.text ?? '';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.green.withAlpha(20),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green.withAlpha(50)),
-      ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.text_snippet, color: Colors.green, size: 24),
-              const SizedBox(width: 12),
-              const Text(
-                'Transcript',
-                style: TextStyle(
-                  color: Colors.green,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                '${transcript.split(' ').where((w) => w.isNotEmpty).length} words',
-                style: TextStyle(
-                  color: Colors.white.withAlpha(150),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.black.withAlpha(50),
-              borderRadius: BorderRadius.circular(8),
+          const Text(
+            'Transcript',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
             ),
-            child: SelectableText(
-              transcript.isEmpty
-                  ? '(Empty transcript - audio may not contain speech)'
-                  : transcript,
-              style: TextStyle(
-                color: transcript.isEmpty
-                    ? Colors.white.withAlpha(100)
-                    : Colors.white,
-                fontSize: 14,
-                height: 1.5,
-              ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${transcript.split(' ').where((w) => w.isNotEmpty).length} words',
+            style: TextStyle(color: Colors.white.withAlpha(120), fontSize: 12),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            transcript,
+            style: TextStyle(
+              color: Colors.white.withAlpha(210),
+              fontSize: 15,
+              height: 1.55,
             ),
           ),
         ],
@@ -543,94 +561,44 @@ class _ProcessingScreenState extends State<ProcessingScreen> {
   }
 
   Widget _buildSummaryCard(ProcessingState state) {
-    final summary = state.summaryResult;
-    if (summary == null) return const SizedBox();
+    final summary = state.summaryResult!;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF00D9FF).withAlpha(20),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF00D9FF).withAlpha(50)),
-      ),
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: AppColors.cyan.withAlpha(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
-            children: [
-              Icon(Icons.summarize, color: Color(0xFF00D9FF), size: 24),
-              SizedBox(width: 12),
-              Text(
-                'Summary',
-                style: TextStyle(
-                  color: Color(0xFF00D9FF),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
+          const Text(
+            'Summary',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Text(
             summary.summary,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 14,
-              height: 1.5,
+              fontSize: 16,
+              height: 1.6,
             ),
           ),
-          if (summary.keyPoints.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            ...summary.keyPoints.map(
-              (point) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(top: 6),
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFF00D9FF),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        point,
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(200),
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
 
   bool _isStepComplete(ProcessingStatus current, ProcessingStatus step) {
-    final order = [
-      ProcessingStatus.idle,
-      ProcessingStatus.convertingAudio,
-      ProcessingStatus.initializingModel,
-      ProcessingStatus.processing,
-      ProcessingStatus.complete,
-    ];
-    return order.indexOf(current) > order.indexOf(step);
+    return current.index > step.index;
   }
 
   String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
+    if (d.inSeconds < 60) return '${d.inSeconds}s';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ${d.inSeconds % 60}s';
+    return '${d.inHours}h ${d.inMinutes % 60}m';
   }
 }
 
@@ -638,5 +606,6 @@ class _StepData {
   final String label;
   final ProcessingStatus status;
   final IconData icon;
+
   _StepData(this.label, this.status, this.icon);
 }

@@ -11,8 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vm_summ/main.dart';
 
 void main() {
-  testWidgets('App loads without crashing', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('App loads redesigned home surface', (WidgetTester tester) async {
     await tester.pumpWidget(
       const VoiceNoteSummarizerApp(
         enableBackgroundServices: false,
@@ -20,7 +19,21 @@ void main() {
       ),
     );
 
-    // Verify that the app loads
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(find.text('Summaries that feel immediate.'), findsOneWidget);
+    expect(find.text('Import audio'), findsOneWidget);
+    expect(find.text('Queue'), findsWidgets);
+  });
+
+  testWidgets('App shell still boots', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const VoiceNoteSummarizerApp(
+        enableBackgroundServices: false,
+        enableNotifications: false,
+      ),
+    );
+
     expect(find.byType(MaterialApp), findsOneWidget);
   });
 }
