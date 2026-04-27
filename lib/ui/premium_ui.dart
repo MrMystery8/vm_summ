@@ -245,7 +245,7 @@ class _PremiumBackdropState extends State<PremiumBackdrop>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 16),
+      duration: const Duration(seconds: 22),
     )..repeat(reverse: true);
   }
 
@@ -274,23 +274,23 @@ class _PremiumBackdropState extends State<PremiumBackdrop>
               ),
             ),
             Positioned(
-              top: -80 + (10 * math.sin(t * math.pi * 2)),
-              left: -72 + (8 * math.cos(t * math.pi * 2)),
+              top: -64 + (6 * math.sin(t * math.pi * 2)),
+              left: -54 + (5 * math.cos(t * math.pi * 2)),
               child: _SoftGlow(
-                size: 220,
+                size: 170,
                 colors: [
-                  AppColors.cyan.withAlpha(22),
+                  AppColors.cyan.withAlpha(12),
                   AppColors.cyan.withAlpha(0),
                 ],
               ),
             ),
             Positioned(
-              bottom: -120 + (8 * math.cos(t * math.pi * 2)),
-              right: -80 + (10 * math.sin(t * math.pi * 2)),
+              bottom: -92 + (5 * math.cos(t * math.pi * 2)),
+              right: -62 + (6 * math.sin(t * math.pi * 2)),
               child: _SoftGlow(
-                size: 260,
+                size: 200,
                 colors: [
-                  AppColors.violet.withAlpha(18),
+                  AppColors.violet.withAlpha(10),
                   AppColors.violet.withAlpha(0),
                 ],
               ),
@@ -302,9 +302,9 @@ class _PremiumBackdropState extends State<PremiumBackdrop>
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      Colors.white.withAlpha(2),
+                      Colors.white.withAlpha(1),
                       Colors.transparent,
-                      Colors.white.withAlpha(3),
+                      Colors.white.withAlpha(2),
                     ],
                     stops: const [0.0, 0.6, 1.0],
                   ),
@@ -466,10 +466,7 @@ class PremiumProgressCard extends StatelessWidget {
               ),
             ],
           ),
-          if (action != null) ...[
-            const SizedBox(height: 14),
-            action!,
-          ],
+          if (action != null) ...[const SizedBox(height: 14), action!],
         ],
       ),
     );

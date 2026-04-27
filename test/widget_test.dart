@@ -21,8 +21,10 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(find.text('Summaries that feel immediate.'), findsOneWidget);
-    expect(find.text('Import audio'), findsOneWidget);
+    expect(find.textContaining('Voice Note Summarizer'), findsOneWidget);
+    expect(find.text('Tap to record'), findsOneWidget);
+    expect(find.text('Pick Audio File'), findsOneWidget);
+    expect(find.text('Model status'), findsOneWidget);
     expect(find.text('Queue'), findsWidgets);
   });
 
