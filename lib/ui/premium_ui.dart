@@ -274,42 +274,39 @@ class _PremiumBackdropState extends State<PremiumBackdrop>
               ),
             ),
             Positioned(
-              top: -120 + (18 * math.sin(t * math.pi * 2)),
-              left: -120,
-              child: _GlowOrb(
-                size: 280,
+              top: -80 + (10 * math.sin(t * math.pi * 2)),
+              left: -72 + (8 * math.cos(t * math.pi * 2)),
+              child: _SoftGlow(
+                size: 220,
                 colors: [
-                  AppColors.cyan.withAlpha(42),
+                  AppColors.cyan.withAlpha(22),
                   AppColors.cyan.withAlpha(0),
                 ],
               ),
             ),
             Positioned(
-              bottom: -140,
-              right: -100 + (16 * math.cos(t * math.pi * 2)),
-              child: _GlowOrb(
-                size: 320,
+              bottom: -120 + (8 * math.cos(t * math.pi * 2)),
+              right: -80 + (10 * math.sin(t * math.pi * 2)),
+              child: _SoftGlow(
+                size: 260,
                 colors: [
-                  AppColors.violet.withAlpha(38),
+                  AppColors.violet.withAlpha(18),
                   AppColors.violet.withAlpha(0),
                 ],
               ),
             ),
             Positioned.fill(
-              child: CustomPaint(
-                painter: _PremiumGridPainter(opacity: 0.16 + (t * 0.03)),
-              ),
-            ),
-            Positioned.fill(
-              child: Opacity(
-                opacity: 0.07,
-                child: Container(
-                  decoration: const BoxDecoration(
-                    gradient: RadialGradient(
-                      center: Alignment.topCenter,
-                      radius: 1.2,
-                      colors: [Colors.white, Colors.transparent],
-                    ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Colors.white.withAlpha(2),
+                      Colors.transparent,
+                      Colors.white.withAlpha(3),
+                    ],
+                    stops: const [0.0, 0.6, 1.0],
                   ),
                 ),
               ),
@@ -322,11 +319,11 @@ class _PremiumBackdropState extends State<PremiumBackdrop>
   }
 }
 
-class _GlowOrb extends StatelessWidget {
+class _SoftGlow extends StatelessWidget {
   final double size;
   final List<Color> colors;
 
-  const _GlowOrb({required this.size, required this.colors});
+  const _SoftGlow({required this.size, required this.colors});
 
   @override
   Widget build(BuildContext context) {
@@ -343,29 +340,166 @@ class _GlowOrb extends StatelessWidget {
   }
 }
 
-class _PremiumGridPainter extends CustomPainter {
-  final double opacity;
+class PremiumProgressCard extends StatelessWidget {
+  final IconData icon;
+  final Color accent;
+  final String title;
+  final String? subtitle;
+  final String valueLabel;
+  final double progress;
+  final String footerLeft;
+  final String footerRight;
+  final Widget? trailing;
+  final Widget? action;
+  final Color? fillColor;
 
-  _PremiumGridPainter({required this.opacity});
+  const PremiumProgressCard({
+    super.key,
+    required this.icon,
+    required this.accent,
+    required this.title,
+    required this.valueLabel,
+    required this.progress,
+    required this.footerLeft,
+    required this.footerRight,
+    this.subtitle,
+    this.trailing,
+    this.action,
+    this.fillColor,
+  });
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withAlpha((255 * opacity).round().clamp(0, 255))
-      ..strokeWidth = 0.7;
-
-    const spacing = 36.0;
-    for (double x = 0; x <= size.width; x += spacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y <= size.height; y += spacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
+  Widget build(BuildContext context) {
+    final safeProgress = progress.clamp(0.0, 1.0);
+    return PremiumSurface(
+      borderRadius: BorderRadius.circular(28),
+      borderColor: accent.withAlpha(28),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          (fillColor ?? AppColors.surface).withAlpha(255),
+          AppColors.surfaceElevated.withAlpha(255),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accent.withAlpha(18),
+                ),
+                child: Icon(icon, color: accent, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle!,
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(145),
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    valueLabel,
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (trailing != null) ...[
+                    const SizedBox(height: 6),
+                    trailing!,
+                  ],
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          PremiumLinearProgressBar(progress: safeProgress, accent: accent),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                footerLeft,
+                style: TextStyle(
+                  color: Colors.white.withAlpha(135),
+                  fontSize: 12,
+                ),
+              ),
+              Text(
+                footerRight,
+                style: TextStyle(
+                  color: Colors.white.withAlpha(135),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 14),
+            action!,
+          ],
+        ],
+      ),
+    );
   }
+}
+
+class PremiumLinearProgressBar extends StatelessWidget {
+  final double progress;
+  final Color accent;
+  final double height;
+
+  const PremiumLinearProgressBar({
+    super.key,
+    required this.progress,
+    required this.accent,
+    this.height = 7,
+  });
 
   @override
-  bool shouldRepaint(covariant _PremiumGridPainter oldDelegate) {
-    return oldDelegate.opacity != opacity;
+  Widget build(BuildContext context) {
+    final safeProgress = progress.clamp(0.0, 1.0);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(999),
+      child: LinearProgressIndicator(
+        value: safeProgress,
+        minHeight: height,
+        backgroundColor: Colors.white.withAlpha(12),
+        valueColor: AlwaysStoppedAnimation(accent),
+      ),
+    );
   }
 }
 
@@ -409,9 +543,9 @@ class PremiumSurface extends StatelessWidget {
           boxShadows ??
           [
             BoxShadow(
-              color: Colors.black.withAlpha(35),
-              blurRadius: 24,
-              offset: const Offset(0, 12),
+              color: Colors.black.withAlpha(28),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
             ),
           ],
     );

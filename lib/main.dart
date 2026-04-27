@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/processing_state.dart';
 import 'screens/home_screen.dart';
+import 'screens/processing_screen.dart';
+import 'ui/premium_ui.dart';
 import 'utils/notification_destination.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -32,14 +34,7 @@ class VoiceNoteSummarizerApp extends StatelessWidget {
         navigatorKey: navigatorKey,
         title: 'Voice Note Summarizer',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF00D9FF),
-            brightness: Brightness.dark,
-          ),
-          scaffoldBackgroundColor: const Color(0xFF0D0D1A),
-        ),
+        theme: PremiumTheme.theme(),
         home: const MainNavigator(),
       ),
     );
@@ -106,7 +101,10 @@ class _MainNavigatorState extends State<MainNavigator> {
   Widget build(BuildContext context) {
     return HomeScreen(
       onProcessingStart: () {
-        // Optional: show a snackbar or small indicator instead of full screen redirect
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ProcessingScreen()),
+        );
       },
     );
   }

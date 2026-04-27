@@ -205,54 +205,70 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                 ],
               ),
             ),
-            if (_audioFileExists) _buildAudioPlayerBar(),
           ],
         ),
       ),
+      bottomNavigationBar: _audioFileExists ? _buildAudioPlayerDock() : null,
     );
   }
 
-  Widget _buildAudioPlayerBar() {
-    return PremiumSurface(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      borderRadius: BorderRadius.circular(26),
-      borderColor: AppColors.cyan.withAlpha(24),
-      child: SafeArea(
-        top: false,
+  Widget _buildAudioPlayerDock() {
+    return SafeArea(
+      top: false,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(28),
+          color: AppColors.surfaceElevated.withAlpha(245),
+          border: Border.all(color: AppColors.cyan.withAlpha(28)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(40),
+              blurRadius: 22,
+              offset: const Offset(0, -8),
+            ),
+          ],
+        ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                gradient: const LinearGradient(
+                  colors: [AppColors.cyan, AppColors.violet],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
             Row(
               children: [
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [AppColors.cyan, AppColors.violet],
+                GestureDetector(
+                  onTap: () {
+                    if (_isPlaying) {
+                      _audioPlayer.pause();
+                    } else {
+                      _audioPlayer.resume();
+                    }
+                  },
+                  child: Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.cyan.withAlpha(18),
+                      border: Border.all(color: AppColors.cyan.withAlpha(30)),
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.cyan.withAlpha(40),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: IconButton(
-                    icon: Icon(
+                    child: Icon(
                       _isPlaying
                           ? Icons.pause_rounded
                           : Icons.play_arrow_rounded,
-                      color: Colors.white,
+                      color: AppColors.cyan,
+                      size: 30,
                     ),
-                    onPressed: () {
-                      if (_isPlaying) {
-                        _audioPlayer.pause();
-                      } else {
-                        _audioPlayer.resume();
-                      }
-                    },
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -261,7 +277,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Voice note',
+                        'Play voice note',
                         style: TextStyle(
                           color: Colors.white,
                           fontSize: 16,
@@ -272,7 +288,7 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                       Text(
                         widget.record.sourceFileName,
                         style: TextStyle(
-                          color: Colors.white.withAlpha(130),
+                          color: Colors.white.withAlpha(140),
                           fontSize: 12,
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -280,18 +296,16 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                     ],
                   ),
                 ),
-                PremiumPill(
-                  icon: Icons.timelapse_rounded,
-                  label: _formatDuration(_duration),
-                  color: AppColors.cyan,
-                ),
+                const SizedBox(width: 12),
+                Icon(Icons.graphic_eq_rounded, color: AppColors.cyan.withAlpha(220)),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 trackHeight: 5,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 15),
               ),
               child: Slider(
                 value: clampSliderValue(
@@ -302,6 +316,28 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                 onChanged: (value) {
                   _audioPlayer.seek(Duration(milliseconds: value.toInt()));
                 },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _formatDuration(_position),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(120),
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    _formatDuration(_duration),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(120),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
