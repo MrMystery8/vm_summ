@@ -111,65 +111,103 @@ class QueueScreen extends StatelessWidget {
   Widget _buildQueueSummary(BuildContext context, ProcessingState state) {
     final visibleCount = state.queueCount;
     final totalEstimate = state.totalQueueEstimate;
+    final hasActiveQueue = state.currentItem != null;
 
     return PremiumSurface(
       padding: const EdgeInsets.all(18),
       borderRadius: BorderRadius.circular(28),
       borderColor: AppColors.cyan.withAlpha(30),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.cyan.withAlpha(20),
-                  AppColors.violet.withAlpha(12),
-                ],
-              ),
-            ),
-            child: const Icon(Icons.queue_music_rounded, color: AppColors.cyan),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  state.currentItem != null
-                      ? 'Processing now'
-                      : '$visibleCount item${visibleCount == 1 ? '' : 's'} in queue',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.cyan.withAlpha(20),
+                      AppColors.violet.withAlpha(12),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 4),
+                child: const Icon(
+                  Icons.queue_music_rounded,
+                  color: AppColors.cyan,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hasActiveQueue
+                          ? state.queuePositionLabel
+                          : '$visibleCount item${visibleCount == 1 ? '' : 's'} in queue',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      totalEstimate.inSeconds > 0
+                          ? 'Estimated ${_formatDuration(totalEstimate)} remaining'
+                          : 'Items stay in order and can be rearranged at any time.',
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(140),
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasActiveQueue)
                 Text(
-                  totalEstimate.inSeconds > 0
-                      ? 'Estimated ${_formatDuration(totalEstimate)} remaining'
-                      : 'Items stay in order and can be rearranged at any time.',
+                  state.queueProgressLabel,
+                  style: const TextStyle(
+                    color: AppColors.cyan,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+            ],
+          ),
+          if (hasActiveQueue) ...[
+            const SizedBox(height: 16),
+            PremiumLinearProgressBar(
+              progress: state.queueProgress,
+              accent: AppColors.cyan,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  state.statusMessage.isEmpty
+                      ? 'Processing now'
+                      : state.statusMessage,
                   style: TextStyle(
                     color: Colors.white.withAlpha(140),
-                    fontSize: 13,
-                    height: 1.35,
+                    fontSize: 12,
+                  ),
+                ),
+                Text(
+                  'Current item ${state.currentItemProgressLabel}',
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(140),
+                    fontSize: 12,
                   ),
                 ),
               ],
             ),
-          ),
-          if (state.isProcessing)
-            const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation(AppColors.cyan),
-              ),
-            ),
+          ],
         ],
       ),
     );
@@ -283,7 +321,7 @@ class QueueScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       isProcessing
-                          ? 'Processing now'
+                          ? '${state.queuePositionLabel} · current ${state.currentItemProgressLabel}'
                           : 'Estimated ${item.formattedEstimate}',
                       style: TextStyle(
                         color: Colors.white.withAlpha(120),
@@ -310,6 +348,15 @@ class QueueScreen extends StatelessWidget {
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
+                  ),
+                )
+              else
+                Text(
+                  state.queueProgressLabel,
+                  style: const TextStyle(
+                    color: AppColors.cyan,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
             ],

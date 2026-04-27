@@ -195,8 +195,17 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     markerFile.delete()
                 }
                 
+                var totalAssetBytes = try {
+                    context.assets.openFd(assetName).length
+                } catch (_: Exception) {
+                    -1L
+                }
+
                 // Copy from assets using chunked reading into a temp file first.
                 context.assets.open(assetName).use { input ->
+                    if (totalAssetBytes <= 0) {
+                        totalAssetBytes = input.available().toLong()
+                    }
                     FileOutputStream(tmpFile).use { output ->
                         val buffer = ByteArray(65536) // 64KB buffer
                         var bytesRead: Int
@@ -207,8 +216,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                             output.write(buffer, 0, bytesRead)
                             totalBytes += bytesRead
                             
-                            // Report progress every 50MB
-                            if (totalBytes - lastProgressUpdate >= 50 * 1024 * 1024) {
+                            // Report frequently enough for a real progress bar without flooding Flutter.
+                            if (totalBytes - lastProgressUpdate >= 4 * 1024 * 1024) {
                                 lastProgressUpdate = totalBytes
                                 Log.d(TAG, "Copied ${totalBytes / 1024 / 1024} MB...")
                                 
@@ -216,6 +225,12 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                                     eventSink?.success(mapOf(
                                         "modelName" to destName,
                                         "bytesDownloaded" to totalBytes,
+                                        "totalBytes" to totalAssetBytes,
+                                        "progress" to if (totalAssetBytes > 0) {
+                                            (totalBytes.toDouble() / totalAssetBytes * 100).toInt().coerceIn(0, 99)
+                                        } else {
+                                            -1
+                                        },
                                         "status" to "copying"
                                     ))
                                 }
@@ -247,6 +262,8 @@ class GemmaModelManager : FlutterPlugin, MethodCallHandler, EventChannel.StreamH
                     eventSink?.success(mapOf(
                         "modelName" to destName,
                         "bytesDownloaded" to destFile.length(),
+                        "totalBytes" to if (totalAssetBytes > 0) totalAssetBytes else destFile.length(),
+                        "progress" to 100,
                         "status" to "complete"
                     ))
                     

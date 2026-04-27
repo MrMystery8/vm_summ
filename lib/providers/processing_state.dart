@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart'; // For MaterialPageRoute
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -157,9 +158,11 @@ class ProcessingState extends ChangeNotifier {
   ModelStatus _modelStatus = ModelStatus.notDownloaded;
   String _modelStatusMessage = 'Model not initialized';
   double _modelDownloadProgress = 0.0;
+  Timer? _modelProgressTimer;
 
   // Results from Gemma
   GemmaAudioResult? _gemmaResult;
+  int _historyRevision = 0;
 
   // Queue system with mutex lock for strict sequential processing
   final List<QueueItem> _queueItems = [];
@@ -167,6 +170,9 @@ class ProcessingState extends ChangeNotifier {
   Completer<void>? _processingLock; // Mutex for sequential processing
   QueueItem? _currentItem;
   DateTime? _currentProcessingStartTime;
+  int _activeQueueTotalCount = 0;
+  int _activeQueueFinishedCount = 0;
+  Timer? _processingProgressTimer;
 
   // Deduplication - track recently processed files
   final Set<String> _processedFilePaths = {};
@@ -507,11 +513,11 @@ Interview subject/topic
           _notificationReady = _notificationService.initialize(
             onDidReceiveNotificationResponse:
                 (NotificationResponse details) async {
-              debugPrint(
-                'Queue: Notification tapped with payload: ${details.payload}',
-              );
-              await _handleNotificationPayload(details.payload);
-            },
+                  debugPrint(
+                    'Queue: Notification tapped with payload: ${details.payload}',
+                  );
+                  await _handleNotificationPayload(details.payload);
+                },
           );
           await _notificationReady;
           await _handleNotificationPayload(
@@ -800,7 +806,9 @@ Interview subject/topic
     final record = await resolveSummaryRecord(payload);
     if (record != null) {
       navigator.push(
-        MaterialPageRoute(builder: (_) => notificationDestinationForRecord(record)),
+        MaterialPageRoute(
+          builder: (_) => notificationDestinationForRecord(record),
+        ),
       );
       return;
     }
@@ -818,8 +826,61 @@ Interview subject/topic
   String? get errorMessage => _errorMessage;
   String? get currentAudioPath => _currentAudioPath;
   double get modelDownloadProgress => _modelDownloadProgress;
+  bool get hasDeterminateModelProgress =>
+      _modelStatus == ModelStatus.ready ||
+      (_modelStatus == ModelStatus.copying &&
+          _modelDownloadProgress >= 0.0 &&
+          _modelDownloadProgress <= 1.0);
+  String get modelProgressLabel {
+    if (_modelStatus == ModelStatus.ready) return '100%';
+    if (_modelStatus == ModelStatus.notDownloaded) return 'Not ready';
+    if (_modelStatus == ModelStatus.error) return 'Error';
+    if (!hasDeterminateModelProgress) return 'Loading';
+    return _formatPercent(_modelDownloadProgress);
+  }
+
   ModelStatus get modelStatus => _modelStatus;
   String get modelStatusMessage => _modelStatusMessage;
+  int get historyRevision => _historyRevision;
+  double get currentItemProgress =>
+      isProcessing ? _progress.clamp(0.0, 1.0).toDouble() : 0.0;
+  double get queueProgress {
+    if (_currentItem == null) return 0.0;
+
+    final pendingCount = _queueItems
+        .where((item) => item.status == QueueItemStatus.pending)
+        .length;
+    final activeTotal = [
+      _activeQueueTotalCount,
+      _activeQueueFinishedCount + 1 + pendingCount,
+    ].reduce((a, b) => a > b ? a : b);
+    if (activeTotal <= 0) return 0.0;
+
+    return ((_activeQueueFinishedCount + currentItemProgress) / activeTotal)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  String get queueProgressLabel => _formatPercent(queueProgress);
+  String get currentItemProgressLabel => _formatPercent(currentItemProgress);
+
+  String get queuePositionLabel {
+    if (_currentItem == null) {
+      if (pendingQueueCount > 0) {
+        return '$pendingQueueCount item${pendingQueueCount == 1 ? '' : 's'} waiting';
+      }
+      return 'Idle';
+    }
+
+    final pendingCount = _queueItems
+        .where((item) => item.status == QueueItemStatus.pending)
+        .length;
+    final total = [
+      _activeQueueTotalCount,
+      _activeQueueFinishedCount + 1 + pendingCount,
+    ].reduce((a, b) => a > b ? a : b);
+    return 'Processing ${_activeQueueFinishedCount + 1} of $total';
+  }
 
   // Expose service for chat
   GemmaAudioService get gemmaService => _gemmaService;
@@ -890,29 +951,33 @@ Interview subject/topic
           retryCount > 0
               ? 'Retrying initialization (${retryCount + 1}/$maxRetries)...'
               : 'Copying Gemma model from assets...',
-          0.1,
+          0.0,
         );
 
         // Initialize audio converter
+        _startModelProgressEstimate(
+          message: 'Preparing audio pipeline...',
+          start: _modelDownloadProgress.clamp(0.0, 0.08).toDouble(),
+          target: 0.08,
+          duration: const Duration(seconds: 2),
+        );
         await _audioConverter.initialize();
 
-        _updateModelStatus(
-          ModelStatus.copying,
-          'Loading Gemma 4 E2B model...',
-          0.3,
+        _startModelProgressEstimate(
+          message: 'Preparing Gemma 4 E2B...',
+          start: math.max(_modelDownloadProgress, 0.08),
+          target: 0.96,
+          duration: const Duration(seconds: 30),
         );
 
         // Initialize Gemma with bundled model
         await _gemmaService.initializeWithBundledModel(
           onProgress: (progress) {
-            _updateModelStatus(
-              ModelStatus.copying,
-              'Copying model: ${progress.formattedProgress}',
-              0.3 + (progress.progress / 100) * 0.6,
-            );
+            _handleModelProgress(progress);
           },
         );
 
+        _stopModelProgressEstimate();
         _updateModelStatus(ModelStatus.ready, 'Gemma 4 E2B ready', 1.0);
 
         // Auto-process any queued files after init
@@ -937,6 +1002,7 @@ Interview subject/topic
 
         if (retryCount >= maxRetries) {
           _updateModelStatus(ModelStatus.error, 'Model error: $e', 0.0);
+          _stopModelProgressEstimate();
           _isInitializing = false;
           return;
         }
@@ -947,6 +1013,7 @@ Interview subject/topic
     }
 
     _isInitializing = false;
+    _stopModelProgressEstimate();
   }
 
   /// Retry initialization after error
@@ -1198,6 +1265,10 @@ Interview subject/topic
 
     // Reload queue from disk to pick up items from other instances
     await _loadQueue();
+    _activeQueueFinishedCount = 0;
+    _activeQueueTotalCount = _queueItems
+        .where((item) => item.status == QueueItemStatus.pending)
+        .length;
 
     while (_queueItems.isNotEmpty) {
       // Get next pending item
@@ -1247,6 +1318,7 @@ Interview subject/topic
         _currentItem!.errorMessage = e.toString();
         debugPrint('Queue: Failed ${_currentItem!.fileName}: $e');
       }
+      _activeQueueFinishedCount++;
 
       // CRITICAL: Reload from disk to get items added by other instances
       // before we save our changes (removal of completed item)
@@ -1261,7 +1333,7 @@ Interview subject/topic
       await _saveQueue();
 
       // Show notification for completion
-        if (_currentItem!.status == QueueItemStatus.completed) {
+      if (_currentItem!.status == QueueItemStatus.completed) {
         // Try to find the summary title if available, or just use filename
         String title = 'Processing Complete';
         String body = 'Processed ${_currentItem!.fileName}';
@@ -1311,6 +1383,8 @@ Interview subject/topic
     _isProcessingQueue = false;
     _processingLock?.complete();
     _processingLock = null;
+    _activeQueueTotalCount = 0;
+    _activeQueueFinishedCount = 0;
 
     // Release file-based lock
     await _releaseFileLock();
@@ -1341,15 +1415,22 @@ Interview subject/topic
     File? wavFile;
     try {
       // Step 1: Convert audio to WAV format
-      _updateStatus(
-        ProcessingStatus.convertingAudio,
-        'Converting audio format...',
-        0.2,
+      _startProcessingProgressEstimate(
+        status: ProcessingStatus.convertingAudio,
+        message: 'Converting audio format...',
+        start: 0.02,
+        target: 0.18,
+        duration: _estimateConversionDuration(audioFile),
       );
 
       try {
         wavFile = await _audioConverter.convertTo16kMonoWav(audioFile);
         debugPrint('Converted audio to: ${wavFile.path}');
+        _finishProcessingPhase(
+          ProcessingStatus.convertingAudio,
+          'Audio converted',
+          0.18,
+        );
       } catch (e) {
         debugPrint('Audio conversion error: $e');
         _setError('Audio conversion failed: $e');
@@ -1357,10 +1438,12 @@ Interview subject/topic
       }
 
       // Step 2: Process with Gemma (transcription + summarization in one pass)
-      _updateStatus(
-        ProcessingStatus.processing,
-        'Processing with Gemma 4 E2B...',
-        0.5,
+      _startProcessingProgressEstimate(
+        status: ProcessingStatus.processing,
+        message: 'Transcribing and summarizing...',
+        start: math.max(_progress, 0.18),
+        target: 0.92,
+        duration: _estimateInferenceDuration(audioFile),
       );
 
       // Process with Gemma (using custom prompts if set)
@@ -1377,6 +1460,13 @@ Interview subject/topic
 
       // Save to history
       try {
+        _startProcessingProgressEstimate(
+          status: ProcessingStatus.processing,
+          message: 'Saving summary...',
+          start: math.max(_progress, 0.92),
+          target: 0.98,
+          duration: const Duration(seconds: 1),
+        );
         final originalFileName = audioFile.path.split('/').last;
         // Use generated title if available, otherwise use original filename
         final displayName = _gemmaResult?.title?.isNotEmpty == true
@@ -1397,6 +1487,8 @@ Interview subject/topic
           actionItems: _gemmaResult!.actionItems ?? 'None',
         );
         debugPrint('Saved summary to history');
+        _historyRevision++;
+        _updateStatus(ProcessingStatus.complete, 'Processing complete!', 1.0);
         return savedRecord;
       } catch (e) {
         debugPrint('Failed to save summary: $e');
@@ -1450,10 +1542,7 @@ Interview subject/topic
   }
 
   Future<String> _transcribeOnly(File wavFile) async {
-    final result = await _gemmaService.transcribe(
-      wavFile,
-      language: null,
-    );
+    final result = await _gemmaService.transcribe(wavFile, language: null);
     final transcript = result.transcript ?? result.response;
     if (transcript.trim().isEmpty) {
       throw Exception('Transcript is empty');
@@ -1484,10 +1573,14 @@ Interview subject/topic
 
     final combinedNotes = chunkNotes.isEmpty
         ? transcript
-        : chunkNotes.asMap().entries.map((entry) {
-            final index = entry.key + 1;
-            return 'Chunk $index:\n${entry.value}';
-          }).join('\n\n');
+        : chunkNotes
+              .asMap()
+              .entries
+              .map((entry) {
+                final index = entry.key + 1;
+                return 'Chunk $index:\n${entry.value}';
+              })
+              .join('\n\n');
 
     final finalPrompt =
         'Combine the following section notes into the final summary. '
@@ -1584,9 +1677,7 @@ Interview subject/topic
 
       if (trimmed.isEmpty || trimmed.startsWith('##')) continue;
 
-      final cleaned = trimmed
-          .replaceFirst(RegExp(r'^[•\-\*]\s*'), '')
-          .trim();
+      final cleaned = trimmed.replaceFirst(RegExp(r'^[•\-\*]\s*'), '').trim();
       if (cleaned.isEmpty) continue;
 
       switch (section) {
@@ -1613,14 +1704,16 @@ Interview subject/topic
 
     titleLine ??= summaryLines.isNotEmpty
         ? summaryLines.first.length > 50
-            ? summaryLines.first.substring(0, 50)
-            : summaryLines.first
+              ? summaryLines.first.substring(0, 50)
+              : summaryLines.first
         : transcript.split(RegExp(r'\s+')).take(6).join(' ');
+
+    final title = titleLine.trim();
 
     return GemmaAudioResult(
       response: rawResponse,
       transcript: transcript,
-      title: titleLine?.trim().isNotEmpty == true ? titleLine!.trim() : null,
+      title: title.isNotEmpty ? title : null,
       summary: summaryLines.isNotEmpty
           ? summaryLines.join(' ')
           : 'No summary generated.',
@@ -1630,6 +1723,7 @@ Interview subject/topic
   }
 
   void _updateStatus(ProcessingStatus status, String message, double progress) {
+    _stopProcessingProgressEstimate();
     _status = status;
     _statusMessage = message;
     _progress = progress;
@@ -1640,11 +1734,191 @@ Interview subject/topic
   void _updateModelStatus(ModelStatus status, String message, double progress) {
     _modelStatus = status;
     _modelStatusMessage = message;
-    _modelDownloadProgress = progress;
+    _modelDownloadProgress = progress.clamp(-1.0, 1.0).toDouble();
     notifyListeners();
   }
 
+  void _handleModelProgress(ModelDownloadProgress progress) {
+    if (progress.status == 'initializing') {
+      _startModelProgressEstimate(
+        message: 'Starting Gemma engine...',
+        start: math.max(_modelDownloadProgress, 0.85),
+        target: 0.96,
+        duration: const Duration(seconds: 20),
+      );
+      return;
+    }
+
+    final copyProgress = _normaliseModelProgress(progress);
+    if (copyProgress == null) {
+      _startModelProgressEstimate(
+        message: 'Copying model...',
+        start: math.max(_modelDownloadProgress, 0.0),
+        target: 0.84,
+        duration: const Duration(seconds: 30),
+      );
+      return;
+    }
+
+    _stopModelProgressEstimate();
+    final isComplete = progress.isComplete;
+    final overallProgress = isComplete
+        ? math.max(_modelDownloadProgress, 0.85)
+        : (copyProgress * 0.85).clamp(0.0, 0.85).toDouble();
+    _updateModelStatus(
+      ModelStatus.copying,
+      isComplete
+          ? 'Starting Gemma engine...'
+          : 'Copying model: ${progress.formattedProgress}',
+      overallProgress,
+    );
+
+    if (isComplete) {
+      _startModelProgressEstimate(
+        message: 'Starting Gemma engine...',
+        start: overallProgress,
+        target: 0.96,
+        duration: const Duration(seconds: 20),
+      );
+    }
+  }
+
+  void _startModelProgressEstimate({
+    required String message,
+    required double start,
+    required double target,
+    required Duration duration,
+  }) {
+    _stopModelProgressEstimate();
+    final safeStart = start.clamp(0.0, 0.99).toDouble();
+    final safeTarget = math.max(safeStart, target.clamp(0.0, 0.99).toDouble());
+    final startedAt = DateTime.now();
+    _updateModelStatus(ModelStatus.copying, message, safeStart);
+
+    _modelProgressTimer = Timer.periodic(const Duration(milliseconds: 250), (
+      _,
+    ) {
+      final elapsed = DateTime.now().difference(startedAt);
+      final fraction = duration.inMilliseconds <= 0
+          ? 1.0
+          : (elapsed.inMilliseconds / duration.inMilliseconds)
+                .clamp(0.0, 1.0)
+                .toDouble();
+      final eased = 1 - math.pow(1 - fraction, 2).toDouble();
+      final next = safeStart + ((safeTarget - safeStart) * eased);
+      if (next > _modelDownloadProgress) {
+        _updateModelStatus(ModelStatus.copying, message, next);
+      }
+    });
+  }
+
+  void _stopModelProgressEstimate() {
+    _modelProgressTimer?.cancel();
+    _modelProgressTimer = null;
+  }
+
+  void _startProcessingProgressEstimate({
+    required ProcessingStatus status,
+    required String message,
+    required double start,
+    required double target,
+    required Duration duration,
+  }) {
+    _stopProcessingProgressEstimate();
+    final safeStart = start.clamp(0.0, 0.99).toDouble();
+    final safeTarget = math.max(safeStart, target.clamp(0.0, 0.99).toDouble());
+    final startedAt = DateTime.now();
+    _status = status;
+    _statusMessage = message;
+    _progress = math.max(_progress, safeStart);
+    _errorMessage = null;
+    notifyListeners();
+
+    _processingProgressTimer = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) {
+        final elapsed = DateTime.now().difference(startedAt);
+        final fraction = duration.inMilliseconds <= 0
+            ? 1.0
+            : (elapsed.inMilliseconds / duration.inMilliseconds)
+                  .clamp(0.0, 1.0)
+                  .toDouble();
+        final eased = 1 - math.pow(1 - fraction, 2).toDouble();
+        final next = safeStart + ((safeTarget - safeStart) * eased);
+        if (next > _progress) {
+          _progress = next;
+          notifyListeners();
+        }
+      },
+    );
+  }
+
+  void _finishProcessingPhase(
+    ProcessingStatus status,
+    String message,
+    double progress,
+  ) {
+    _stopProcessingProgressEstimate();
+    _status = status;
+    _statusMessage = message;
+    _progress = math.max(_progress, progress.clamp(0.0, 1.0).toDouble());
+    _errorMessage = null;
+    notifyListeners();
+  }
+
+  void _stopProcessingProgressEstimate() {
+    _processingProgressTimer?.cancel();
+    _processingProgressTimer = null;
+  }
+
+  Duration _estimateConversionDuration(File audioFile) {
+    final sizeMb = _fileSizeBytes(audioFile) / (1024 * 1024);
+    return Duration(
+      milliseconds: (1000 + (sizeMb * 350)).round().clamp(1000, 6000),
+    );
+  }
+
+  Duration _estimateInferenceDuration(File audioFile) {
+    if (_recentProcessingTimes.isNotEmpty) {
+      final averageMs =
+          _recentProcessingTimes
+              .map((duration) => duration.inMilliseconds)
+              .reduce((a, b) => a + b) /
+          _recentProcessingTimes.length;
+      return Duration(milliseconds: averageMs.round().clamp(8000, 90000));
+    }
+
+    final sizeMb = _fileSizeBytes(audioFile) / (1024 * 1024);
+    return Duration(
+      milliseconds: (12000 + (sizeMb * 1800)).round().clamp(12000, 90000),
+    );
+  }
+
+  int _fileSizeBytes(File file) {
+    try {
+      return file.existsSync() ? file.lengthSync() : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  double? _normaliseModelProgress(ModelDownloadProgress progress) {
+    if (progress.progress >= 0) {
+      return (progress.progress / 100).clamp(0.0, 1.0);
+    }
+    if (progress.totalBytes > 0) {
+      return (progress.bytesDownloaded / progress.totalBytes).clamp(0.0, 1.0);
+    }
+    return null;
+  }
+
+  String _formatPercent(double value) {
+    return '${(value.clamp(0.0, 1.0) * 100).round()}%';
+  }
+
   void _setError(String message) {
+    _stopProcessingProgressEstimate();
+    _stopModelProgressEstimate();
     _status = ProcessingStatus.error;
     _errorMessage = message;
     _statusMessage = 'Error occurred';
@@ -1652,6 +1926,7 @@ Interview subject/topic
   }
 
   void _reset() {
+    _stopProcessingProgressEstimate();
     _status = ProcessingStatus.idle;
     _statusMessage = '';
     _progress = 0.0;
@@ -1662,6 +1937,7 @@ Interview subject/topic
 
   /// Clear results and reset to idle
   void clear() {
+    _stopProcessingProgressEstimate();
     _currentAudioPath = null;
     _reset();
   }
@@ -1670,6 +1946,8 @@ Interview subject/topic
   void dispose() {
     _gemmaService.dispose();
     _queuePollTimer?.cancel();
+    _stopModelProgressEstimate();
+    _stopProcessingProgressEstimate();
     super.dispose();
   }
 }

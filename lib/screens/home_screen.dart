@@ -27,11 +27,12 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final AudioRecorderService _recorderService = AudioRecorderService();
-  final SummaryStorageService _historyService = SummaryStorageService();
 
   Duration _recordingDuration = Duration.zero;
   StreamSubscription<Duration>? _durationSubscription;
   StreamSubscription<RecordingState>? _stateSubscription;
+  ProcessingState? _processingState;
+  int _seenHistoryRevision = 0;
 
   bool _isRecording = false;
   bool _isPaused = false;
@@ -46,6 +47,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _setupRecorderListeners();
     _loadHistory();
     WidgetsBinding.instance.addPostFrameCallback((_) => _initializeApp());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final state = context.read<ProcessingState>();
+    if (_processingState == state) return;
+    _processingState?.removeListener(_handleProcessingStateChanged);
+    _processingState = state;
+    _seenHistoryRevision = state.historyRevision;
+    state.addListener(_handleProcessingStateChanged);
   }
 
   void _setupRecorderListeners() {
@@ -66,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadHistory() async {
     try {
-      final records = await _historyService.getAllRecords();
+      final records = await SummaryStorageService().getAllRecords();
       if (!mounted) return;
       setState(() {
         _historyRecords = records;
@@ -79,6 +91,13 @@ class _HomeScreenState extends State<HomeScreen> {
         _isLoadingHistory = false;
       });
     }
+  }
+
+  void _handleProcessingStateChanged() {
+    final revision = _processingState?.historyRevision ?? 0;
+    if (revision == _seenHistoryRevision) return;
+    _seenHistoryRevision = revision;
+    unawaited(_loadHistory());
   }
 
   Future<void> _initializeApp() async {
@@ -210,6 +229,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _processingState?.removeListener(_handleProcessingStateChanged);
     _durationSubscription?.cancel();
     _stateSubscription?.cancel();
     _recorderService.dispose();
@@ -330,7 +350,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               MaterialPageRoute(
                                 builder: (_) => const HistoryScreen(),
                               ),
-                            );
+                            ).then((_) {
+                              if (mounted) unawaited(_loadHistory());
+                            });
                           },
                           child: const SizedBox.shrink(),
                         ),
@@ -386,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case ModelStatus.copying:
         return _SectionBadge(
           icon: Icons.downloading_rounded,
-          label: '${(state.modelDownloadProgress * 100).round()}%',
+          label: state.modelProgressLabel,
           color: AppColors.cyan,
           maxWidth: 100,
         );
@@ -1076,8 +1098,10 @@ class ModelStatusPanel extends StatelessWidget {
     final isReady = state.modelStatus == ModelStatus.ready;
     final isCopying = state.modelStatus == ModelStatus.copying;
     final hasError = state.modelStatus == ModelStatus.error;
-    final progress = isReady ? 1.0 : state.modelDownloadProgress;
-    final percent = '${(progress.clamp(0.0, 1.0) * 100).round()}%';
+    final progress = state.hasDeterminateModelProgress
+        ? state.modelDownloadProgress.clamp(0.0, 1.0).toDouble()
+        : 0.0;
+    final percent = state.modelProgressLabel;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1143,14 +1167,16 @@ class ModelStatusPanel extends StatelessWidget {
             subtle: true,
           ),
         ] else if (!isReady) ...[
-          const SizedBox(height: 14),
-          PremiumActionButton(
-            label: 'Download model',
-            icon: Icons.download_rounded,
-            onPressed: onDownload,
-            expanded: true,
-            subtle: true,
-          ),
+          if (!isCopying) ...[
+            const SizedBox(height: 14),
+            PremiumActionButton(
+              label: 'Download model',
+              icon: Icons.download_rounded,
+              onPressed: onDownload,
+              expanded: true,
+              subtle: true,
+            ),
+          ],
         ],
       ],
     );
@@ -1190,7 +1216,7 @@ class QueuePanel extends StatelessWidget {
     }
 
     final current = state.currentItem;
-    final progress = state.isProcessing ? state.progress : 0.0;
+    final progress = state.queueProgress;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1211,14 +1237,14 @@ class QueuePanel extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Current item',
+                state.queuePositionLabel,
                 style: TextStyle(
                   color: Colors.white.withAlpha(140),
                   fontSize: 12,
                 ),
               ),
               Text(
-                '${(progress.clamp(0.0, 1.0) * 100).round()}%',
+                state.queueProgressLabel,
                 style: TextStyle(
                   color: Colors.white.withAlpha(140),
                   fontSize: 12,

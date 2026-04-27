@@ -73,14 +73,10 @@ class ProcessingScreen extends StatelessWidget {
         child: SafeArea(
           child: Consumer<ProcessingState>(
             builder: (context, state, _) {
-              final modelProgress = state.modelStatus == ModelStatus.ready
-                  ? 1.0
-                  : state.modelDownloadProgress;
-              final modelPercent =
-                  '${(modelProgress.clamp(0.0, 1.0) * 100).round()}%';
-              final processingProgress = state.isProcessing ? state.progress : 0.0;
-              final processingPercent =
-                  '${(processingProgress.clamp(0.0, 1.0) * 100).round()}%';
+              final modelProgress = state.hasDeterminateModelProgress
+                  ? state.modelDownloadProgress.clamp(0.0, 1.0).toDouble()
+                  : 0.0;
+              final processingProgress = state.queueProgress;
 
               return ListView(
                 physics: const BouncingScrollPhysics(),
@@ -112,7 +108,7 @@ class ProcessingScreen extends StatelessWidget {
                           ? 'Model loaded'
                           : 'Loading model',
                       subtitle: state.modelStatusMessage,
-                      valueLabel: modelPercent,
+                      valueLabel: state.modelProgressLabel,
                       progress: modelProgress,
                       footerLeft: state.modelStatus == ModelStatus.ready
                           ? 'Ready for notes'
@@ -142,23 +138,25 @@ class ProcessingScreen extends StatelessWidget {
                       title: state.isProcessing
                           ? 'Processing note'
                           : state.queueCount > 0
-                              ? 'Queued notes'
-                              : 'Processing idle',
+                          ? 'Queued notes'
+                          : 'Processing idle',
                       subtitle: state.currentAudioPath != null
                           ? state.currentAudioPath!.split('/').last
                           : state.queueCount > 0
-                              ? '${state.queueCount} item${state.queueCount == 1 ? '' : 's'} waiting'
-                              : 'Waiting for the next note',
-                      valueLabel: processingPercent,
+                          ? '${state.queueCount} item${state.queueCount == 1 ? '' : 's'} waiting'
+                          : 'Waiting for the next note',
+                      valueLabel: state.queueProgressLabel,
                       progress: processingProgress,
                       footerLeft: state.statusMessage.isEmpty
-                          ? (state.queueCount > 0 ? 'Ready to process' : 'Idle')
+                          ? (state.queueCount > 0
+                                ? state.queuePositionLabel
+                                : 'Idle')
                           : state.statusMessage,
                       footerRight: state.currentAudioPath != null
-                          ? 'Current note'
+                          ? state.queuePositionLabel
                           : state.queueCount > 0
-                              ? 'In queue'
-                              : 'No active file',
+                          ? 'In queue'
+                          : 'No active file',
                       action: state.isProcessing
                           ? PremiumActionButton(
                               label: 'Dismiss',
@@ -205,8 +203,8 @@ class ProcessingScreen extends StatelessWidget {
     final subtitle = state.isProcessing
         ? 'Please keep this screen open while we analyze your audio and create a summary.'
         : state.queueCount > 0
-            ? 'Files are ready in the queue and will process automatically.'
-            : 'This screen shows model loading and note processing progress.';
+        ? 'Files are ready in the queue and will process automatically.'
+        : 'This screen shows model loading and note processing progress.';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -237,11 +235,7 @@ class ProcessingScreen extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: accent.withAlpha(14),
                 ),
-                child: Icon(
-                  Icons.graphic_eq_rounded,
-                  color: accent,
-                  size: 28,
-                ),
+                child: Icon(Icons.graphic_eq_rounded, color: accent, size: 28),
               ),
             ],
           ),
@@ -251,10 +245,10 @@ class ProcessingScreen extends StatelessWidget {
           'Processing note',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.4,
-              ),
+            color: Colors.white,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+          ),
         ),
         const SizedBox(height: 10),
         Text(
@@ -344,10 +338,7 @@ class ProcessingScreen extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             state.errorMessage ?? 'Unknown error',
-            style: TextStyle(
-              color: Colors.white.withAlpha(210),
-              height: 1.5,
-            ),
+            style: TextStyle(color: Colors.white.withAlpha(210), height: 1.5),
           ),
         ],
       ),

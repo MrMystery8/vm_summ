@@ -101,6 +101,12 @@ class ModelDownloadProgress {
     if (progress >= 0) {
       return '$progress%';
     }
+    if (totalBytes > 0) {
+      final percent = (bytesDownloaded / totalBytes * 100)
+          .clamp(0, 100)
+          .round();
+      return '$percent%';
+    }
     final mb = bytesDownloaded / (1024 * 1024);
     return '${mb.toStringAsFixed(1)} MB';
   }
@@ -388,6 +394,15 @@ class GemmaAudioService {
       path = await getModelPath(modelName: modelName);
     }
 
+    onProgress?.call(
+      ModelDownloadProgress(
+        modelName: modelName,
+        bytesDownloaded: 0,
+        totalBytes: 0,
+        progress: -1,
+        status: 'initializing',
+      ),
+    );
     await initialize(path);
   }
 

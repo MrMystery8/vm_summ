@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:async';
 
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter/services.dart';
@@ -42,19 +41,34 @@ class FakeAudioConverter extends AudioConverter {
 
 class FakeGemmaAudioService extends GemmaAudioService {
   final List<String>? events;
+  final List<ModelDownloadProgress> modelProgressEvents;
+  final Duration initializeDelay;
+  final Duration transcribeDelay;
   String? lastSystemInstruction;
   String? lastQueryInstruction;
   String? lastTranscriptionSystem;
   String? lastTranscriptionPrompt;
   bool initialized = false;
 
-  FakeGemmaAudioService({this.events});
+  FakeGemmaAudioService({
+    this.events,
+    this.modelProgressEvents = const [],
+    this.initializeDelay = Duration.zero,
+    this.transcribeDelay = Duration.zero,
+  });
 
   @override
   Future<void> initializeWithBundledModel({
     void Function(ModelDownloadProgress)? onProgress,
   }) async {
     events?.add('gemma.initialize');
+    for (final progress in modelProgressEvents) {
+      onProgress?.call(progress);
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (initializeDelay > Duration.zero) {
+      await Future<void>.delayed(initializeDelay);
+    }
     initialized = true;
   }
 
@@ -72,6 +86,9 @@ class FakeGemmaAudioService extends GemmaAudioService {
     lastTranscriptionSystem = transcriptionSystem;
     lastTranscriptionPrompt = transcriptionPrompt;
     events?.add('gemma.transcribeAndSummarize');
+    if (transcribeDelay > Duration.zero) {
+      await Future<void>.delayed(transcribeDelay);
+    }
 
     return GemmaAudioResult(
       response: 'response',
@@ -159,7 +176,8 @@ class RecordingNotificationService extends NotificationService {
 
   @override
   Future<void> initialize({
-    required void Function(NotificationResponse)? onDidReceiveNotificationResponse,
+    required void Function(NotificationResponse)?
+    onDidReceiveNotificationResponse,
   }) async {}
 
   @override
@@ -318,6 +336,163 @@ void main() {
     if (await tempDir.exists()) {
       await tempDir.delete(recursive: true);
     }
+  });
+
+  test('unknown model progress stays non-negative in the UI label', () async {
+    final state = ProcessingState(
+      audioConverter: FakeAudioConverter(),
+      gemmaService: FakeGemmaAudioService(
+        modelProgressEvents: [
+          ModelDownloadProgress(
+            modelName: 'gemma',
+            bytesDownloaded: 128,
+            totalBytes: 0,
+            progress: -1,
+            status: 'copying',
+          ),
+        ],
+      ),
+      storageService: FakeSummaryStorageService(),
+      enableBackgroundServices: false,
+      enableNotifications: false,
+    );
+
+    var sawUnknownEstimatedState = false;
+    state.addListener(() {
+      if (state.modelStatus == ModelStatus.copying &&
+          state.modelStatusMessage == 'Copying model...' &&
+          state.modelDownloadProgress >= 0.0) {
+        sawUnknownEstimatedState = true;
+      }
+      expect(state.modelDownloadProgress, greaterThanOrEqualTo(-1.0));
+    });
+
+    await state.initialize();
+
+    expect(sawUnknownEstimatedState, isTrue);
+    expect(state.modelStatus, ModelStatus.ready);
+    expect(state.modelProgressLabel, '100%');
+  });
+
+  test(
+    'model copy progress maps bytes and total bytes without jumping to staged cap',
+    () async {
+      final state = ProcessingState(
+        audioConverter: FakeAudioConverter(),
+        gemmaService: FakeGemmaAudioService(
+          modelProgressEvents: [
+            ModelDownloadProgress(
+              modelName: 'gemma',
+              bytesDownloaded: 50,
+              totalBytes: 100,
+              progress: -1,
+              status: 'copying',
+            ),
+          ],
+        ),
+        storageService: FakeSummaryStorageService(),
+        enableBackgroundServices: false,
+        enableNotifications: false,
+      );
+
+      final observedCopyProgress = <double>[];
+      state.addListener(() {
+        if (state.modelStatus == ModelStatus.copying &&
+            state.hasDeterminateModelProgress) {
+          observedCopyProgress.add(state.modelDownloadProgress);
+        }
+      });
+
+      await state.initialize();
+
+      expect(observedCopyProgress, contains(moreOrLessEquals(0.425)));
+      expect(state.modelDownloadProgress, 1.0);
+    },
+  );
+
+  test('engine startup progress advances smoothly and stays capped', () async {
+    final state = ProcessingState(
+      audioConverter: FakeAudioConverter(),
+      gemmaService: FakeGemmaAudioService(
+        initializeDelay: const Duration(milliseconds: 700),
+      ),
+      storageService: FakeSummaryStorageService(),
+      enableBackgroundServices: false,
+      enableNotifications: false,
+    );
+
+    final initFuture = state.initialize();
+    await _waitForCondition(
+      () =>
+          state.modelStatus == ModelStatus.copying &&
+          state.modelStatusMessage.contains('Preparing Gemma'),
+    );
+    final firstProgress = state.modelDownloadProgress;
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+
+    expect(state.modelDownloadProgress, greaterThan(firstProgress));
+    expect(state.modelDownloadProgress, lessThan(0.96));
+
+    await initFuture;
+    expect(state.modelDownloadProgress, 1.0);
+  });
+
+  test('overall queue progress advances during long active work', () async {
+    final state = ProcessingState(
+      audioConverter: SlowAudioConverter(const Duration(milliseconds: 300)),
+      gemmaService: FakeGemmaAudioService(
+        transcribeDelay: const Duration(milliseconds: 700),
+      ),
+      storageService: FakeSummaryStorageService(),
+      enableBackgroundServices: false,
+      enableNotifications: false,
+    );
+
+    final firstFile = File('${tempDir.path}/first.ogg');
+    final secondFile = File('${tempDir.path}/second.ogg');
+    await firstFile.writeAsString('audio');
+    await secondFile.writeAsString('audio');
+
+    expect(state.queueFile(firstFile), isNotNull);
+    expect(state.queueFile(secondFile), isNotNull);
+    final initFuture = state.initialize();
+
+    await _waitForCondition(
+      () =>
+          state.currentItem != null &&
+          state.status == ProcessingStatus.convertingAudio,
+    );
+
+    final firstProgress = state.queueProgress;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    expect(state.queueProgress, greaterThan(firstProgress));
+    expect(state.queueProgress, lessThan(0.5));
+    expect(state.queuePositionLabel, 'Processing 1 of 2');
+
+    await initFuture;
+    await _waitForQueueToDrain(state);
+    expect(state.displayQueueItems, isEmpty);
+  });
+
+  test('saving a processed summary increments history revision', () async {
+    final state = ProcessingState(
+      audioConverter: FakeAudioConverter(),
+      gemmaService: FakeGemmaAudioService(),
+      storageService: FakeSummaryStorageService(),
+      enableBackgroundServices: false,
+      enableNotifications: false,
+    );
+
+    final audioFile = File('${tempDir.path}/history_revision.ogg');
+    await audioFile.writeAsString('audio');
+
+    expect(state.historyRevision, 0);
+    expect(state.queueFile(audioFile), isNotNull);
+    await state.initialize();
+    await _waitForQueueToDrain(state);
+
+    expect(state.historyRevision, 1);
   });
 
   test(
@@ -642,10 +817,7 @@ void main() {
       await state.initialize();
 
       expect(foreground.events, isNotEmpty);
-      expect(
-        foreground.events.first,
-        startsWith('foreground.initialize'),
-      );
+      expect(foreground.events.first, startsWith('foreground.initialize'));
       expect(
         foreground.events,
         contains(
@@ -653,7 +825,10 @@ void main() {
         ),
       );
       expect(foreground.events.last, 'foreground.stop');
-      expect(events, containsAllInOrder(['audio.initialize', 'gemma.initialize']));
+      expect(
+        events,
+        containsAllInOrder(['audio.initialize', 'gemma.initialize']),
+      );
       expect(foreground.running, isFalse);
     },
   );
