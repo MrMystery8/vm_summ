@@ -8,12 +8,16 @@ import 'package:provider/provider.dart';
 import '../providers/processing_state.dart';
 import '../services/summary_storage_service.dart';
 import '../ui/premium_ui.dart';
-import '../utils/slider_bounds.dart';
 
 class NoteDetailScreen extends StatefulWidget {
   final SummaryRecord record;
+  final bool preloadAudio;
 
-  const NoteDetailScreen({super.key, required this.record});
+  const NoteDetailScreen({
+    super.key,
+    required this.record,
+    this.preloadAudio = true,
+  });
 
   @override
   State<NoteDetailScreen> createState() => _NoteDetailScreenState();
@@ -51,7 +55,15 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
     if (await file.exists()) {
       if (!mounted) return;
       setState(() => _audioFileExists = true);
-      await _audioPlayer.setSourceDeviceFile(widget.record.sourceFilePath!);
+      if (!widget.preloadAudio) return;
+      try {
+        await _audioPlayer
+            .setSourceDeviceFile(widget.record.sourceFilePath!)
+            .timeout(const Duration(seconds: 1));
+      } catch (_) {
+        // The dock still renders and playback can fall back to the file path
+        // when the player source cannot be preloaded in the current runtime.
+      }
     }
   }
 
@@ -71,6 +83,14 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
     _audioPlayer.onPositionChanged.listen((newPosition) {
       if (!mounted) return;
       setState(() => _position = newPosition);
+    });
+
+    _audioPlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _isPlaying = false;
+        _position = Duration.zero;
+      });
     });
   }
 
@@ -152,24 +172,6 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
     });
   }
 
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
-  Future<void> _togglePlay(String? audioPath) async {
-    if (audioPath == null) return;
-
-    if (_isPlaying) {
-      await _audioPlayer.pause();
-      if (mounted) setState(() => _isPlaying = false);
-    } else {
-      await _audioPlayer.play(DeviceFileSource(audioPath));
-      if (mounted) setState(() => _isPlaying = true);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -205,143 +207,90 @@ class _NoteDetailScreenState extends State<NoteDetailScreen>
                 ],
               ),
             ),
+            if (_audioFileExists) _buildAudioPlayerDock(),
           ],
         ),
       ),
-      bottomNavigationBar: _audioFileExists ? _buildAudioPlayerDock() : null,
     );
   }
 
   Widget _buildAudioPlayerDock() {
     return SafeArea(
       top: false,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
-          color: AppColors.surfaceElevated.withAlpha(245),
-          border: Border.all(color: AppColors.cyan.withAlpha(28)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withAlpha(40),
-              blurRadius: 22,
-              offset: const Offset(0, -8),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 42,
-              height: 4,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                gradient: const LinearGradient(
-                  colors: [AppColors.cyan, AppColors.violet],
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                GestureDetector(
-                  onTap: () {
-                    if (_isPlaying) {
-                      _audioPlayer.pause();
-                    } else {
-                      _audioPlayer.resume();
-                    }
-                  },
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.cyan.withAlpha(18),
-                      border: Border.all(color: AppColors.cyan.withAlpha(30)),
-                    ),
-                    child: Icon(
-                      _isPlaying
-                          ? Icons.pause_rounded
-                          : Icons.play_arrow_rounded,
-                      color: AppColors.cyan,
-                      size: 30,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Play voice note',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        widget.record.sourceFileName,
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(140),
-                          fontSize: 12,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Icon(Icons.graphic_eq_rounded, color: AppColors.cyan.withAlpha(220)),
-              ],
-            ),
-            const SizedBox(height: 14),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                trackHeight: 5,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 15),
-              ),
-              child: Slider(
-                value: clampSliderValue(
-                  _position.inMilliseconds.toDouble(),
-                  sliderMaxFromDuration(_duration),
-                ),
-                max: sliderMaxFromDuration(_duration),
-                onChanged: (value) {
-                  _audioPlayer.seek(Duration(milliseconds: value.toInt()));
-                },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    _formatDuration(_position),
-                    style: TextStyle(
-                      color: Colors.white.withAlpha(120),
-                      fontSize: 12,
-                    ),
-                  ),
-                  Text(
-                    _formatDuration(_duration),
-                    style: TextStyle(
-                      color: Colors.white.withAlpha(120),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+      child: CompactPlaybackStrip(
+        isPlaying: _isPlaying,
+        position: _position,
+        duration: _duration,
+        onTogglePlay: () => _togglePlayback(widget.record.sourceFilePath),
+        onSeek: (value) {
+          _seekPlayback(value);
+        },
+        margin: EdgeInsets.zero,
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+    );
+  }
+
+  Future<void> _togglePlayback(String? audioPath) async {
+    if (audioPath == null) return;
+
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+      return;
+    }
+
+    final atEnd =
+        _duration.inMilliseconds > 0 &&
+        _position.inMilliseconds >= _playableEndPosition().inMilliseconds;
+
+    if (_audioPlayer.state == PlayerState.paused && !atEnd) {
+      await _audioPlayer.resume();
+      return;
+    }
+
+    await _audioPlayer.play(
+      DeviceFileSource(audioPath),
+      position: atEnd ? Duration.zero : _position,
+    );
+  }
+
+  Future<void> _seekPlayback(Duration value) async {
+    final safePosition = _clampPlayablePosition(value);
+    if (mounted) {
+      setState(() {
+        _position = safePosition;
+        if (_isPlaying &&
+            _duration > Duration.zero &&
+            safePosition >= _playableEndPosition()) {
+          _isPlaying = false;
+        }
+      });
+    }
+
+    await _audioPlayer.seek(safePosition);
+
+    if (_duration > Duration.zero && safePosition >= _playableEndPosition()) {
+      await _audioPlayer.pause();
+    }
+  }
+
+  Duration _clampPlayablePosition(Duration value) {
+    if (_duration <= Duration.zero) return value;
+    if (value <= Duration.zero) return Duration.zero;
+    final playableEnd = _playableEndPosition();
+    return value > playableEnd ? playableEnd : value;
+  }
+
+  Duration _playableEndPosition() {
+    if (_duration <= Duration.zero) return Duration.zero;
+    final guard = _duration.inMilliseconds < 1000
+        ? _duration.inMilliseconds ~/ 2
+        : 500;
+    return Duration(
+      milliseconds: (_duration.inMilliseconds - guard).clamp(
+        0,
+        _duration.inMilliseconds,
       ),
     );
   }

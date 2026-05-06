@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../utils/slider_bounds.dart';
+
 class AppColors {
   static const background = Color(0xFF050816);
   static const backgroundAlt = Color(0xFF090D1A);
@@ -568,6 +570,246 @@ class PremiumSurface extends StatelessWidget {
           onTap: onTap,
           borderRadius: borderRadius.resolve(Directionality.of(context)),
           child: surface,
+        ),
+      ),
+    );
+  }
+}
+
+class CompactPlaybackStrip extends StatelessWidget {
+  static const Duration _endSeekGuard = Duration(milliseconds: 500);
+
+  final String? title;
+  final bool showTitle;
+  final bool isPlaying;
+  final Duration position;
+  final Duration duration;
+  final VoidCallback onTogglePlay;
+  final ValueChanged<Duration> onSeek;
+  final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry? margin;
+  final BorderRadiusGeometry borderRadius;
+  final Color accent;
+
+  const CompactPlaybackStrip({
+    super.key,
+    this.title,
+    this.showTitle = false,
+    required this.isPlaying,
+    required this.position,
+    required this.duration,
+    required this.onTogglePlay,
+    required this.onSeek,
+    this.padding = const EdgeInsets.fromLTRB(14, 12, 14, 12),
+    this.margin,
+    this.borderRadius = const BorderRadius.all(Radius.circular(24)),
+    this.accent = AppColors.cyan,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = sliderMaxFromDuration(duration);
+    final safeValue = clampSliderValue(
+      position.inMilliseconds.toDouble(),
+      maxValue,
+    );
+
+    return SizedBox(
+      width: double.infinity,
+      child: PremiumSurface(
+        margin: margin,
+        padding: padding,
+        borderRadius: borderRadius,
+        borderColor: accent.withAlpha(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.surface.withAlpha(250),
+            AppColors.surfaceElevated.withAlpha(250),
+          ],
+        ),
+        boxShadows: [
+          BoxShadow(
+            color: Colors.black.withAlpha(22),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showTitle && title != null && title!.isNotEmpty) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _formatPlaybackDuration(duration),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(130),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _TransportButton(
+                  icon: Icons.replay_10_rounded,
+                  onPressed: () => _seekBy(const Duration(seconds: -10)),
+                  accent: accent,
+                  compact: true,
+                ),
+                const SizedBox(width: 14),
+                _TransportButton(
+                  icon: isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  onPressed: onTogglePlay,
+                  accent: accent,
+                  compact: false,
+                  filled: true,
+                ),
+                const SizedBox(width: 14),
+                _TransportButton(
+                  icon: Icons.forward_10_rounded,
+                  onPressed: () => _seekBy(const Duration(seconds: 10)),
+                  accent: accent,
+                  compact: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: accent,
+                inactiveTrackColor: Colors.white.withAlpha(18),
+                thumbColor: Colors.white,
+                trackHeight: 3.5,
+                thumbShape: const RoundSliderThumbShape(
+                  enabledThumbRadius: 5.5,
+                ),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              ),
+              child: Slider(
+                value: safeValue,
+                max: maxValue,
+                onChanged: (value) {
+                  onSeek(_safeSeekPosition(value.toInt()));
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _formatPlaybackDuration(position),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(125),
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    _formatPlaybackDuration(duration),
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(125),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _seekBy(Duration delta) {
+    final maxValue = sliderMaxFromDuration(duration).toInt();
+    final target = (position.inMilliseconds + delta.inMilliseconds)
+        .clamp(0, maxValue)
+        .toInt();
+    onSeek(_safeSeekPosition(target));
+  }
+
+  Duration _safeSeekPosition(int targetMilliseconds) {
+    final maxMilliseconds = sliderMaxFromDuration(duration).toInt();
+    if (maxMilliseconds <= 1) return Duration.zero;
+
+    final clamped = targetMilliseconds.clamp(0, maxMilliseconds).toInt();
+    if (clamped >= maxMilliseconds) {
+      final guardedEnd = maxMilliseconds - _endSeekGuard.inMilliseconds;
+      return Duration(milliseconds: math.max(0, guardedEnd));
+    }
+
+    return Duration(milliseconds: clamped);
+  }
+}
+
+String _formatPlaybackDuration(Duration duration) {
+  final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$minutes:$seconds';
+}
+
+class _TransportButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onPressed;
+  final Color accent;
+  final bool compact;
+  final bool filled;
+
+  const _TransportButton({
+    required this.icon,
+    required this.onPressed,
+    required this.accent,
+    this.compact = false,
+    this.filled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final size = compact ? 38.0 : 52.0;
+    final iconSize = compact ? 22.0 : 26.0;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: filled ? accent.withAlpha(20) : Colors.white.withAlpha(8),
+            border: Border.all(
+              color: filled ? accent.withAlpha(28) : Colors.white.withAlpha(10),
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: iconSize,
+            color: filled ? Colors.white : accent,
+          ),
         ),
       ),
     );

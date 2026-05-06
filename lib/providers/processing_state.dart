@@ -759,6 +759,7 @@ Interview subject/topic
     ForegroundServiceAdapter? foregroundServiceAdapter,
     bool enableBackgroundServices = true,
     bool enableNotifications = true,
+    bool bootstrap = true,
   }) : _audioConverter = audioConverter ?? AudioConverter(),
        _gemmaService = gemmaService ?? GemmaAudioService(),
        _storageService = storageService ?? SummaryStorageService(),
@@ -768,7 +769,7 @@ Interview subject/topic
            foregroundServiceAdapter ?? FlutterForegroundServiceAdapter(),
        _enableBackgroundServices = enableBackgroundServices,
        _enableNotifications = enableNotifications {
-    _startupFuture = _bootstrapStartup();
+    _startupFuture = bootstrap ? _bootstrapStartup() : Future.value();
   }
 
   // Initialize and listen to share handler

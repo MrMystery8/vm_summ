@@ -6,17 +6,23 @@ import 'package:share_plus/share_plus.dart';
 
 import '../providers/processing_state.dart';
 import '../ui/premium_ui.dart';
-import '../utils/slider_bounds.dart';
 
 class ResultsScreen extends StatefulWidget {
-  const ResultsScreen({super.key});
+  final String? debugAudioPath;
+  final bool enableAudioPlayer;
+
+  const ResultsScreen({
+    super.key,
+    this.debugAudioPath,
+    this.enableAudioPlayer = true,
+  });
 
   @override
   State<ResultsScreen> createState() => _ResultsScreenState();
 }
 
 class _ResultsScreenState extends State<ResultsScreen> {
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  AudioPlayer? _audioPlayer;
   bool _isPlaying = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
@@ -25,21 +31,27 @@ class _ResultsScreenState extends State<ResultsScreen> {
   @override
   void initState() {
     super.initState();
-    _setupAudioPlayer();
+    if (widget.enableAudioPlayer) {
+      _audioPlayer = AudioPlayer();
+      _setupAudioPlayer();
+    }
   }
 
   void _setupAudioPlayer() {
-    _audioPlayer.onDurationChanged.listen((d) {
+    final audioPlayer = _audioPlayer;
+    if (audioPlayer == null) return;
+
+    audioPlayer.onDurationChanged.listen((d) {
       if (!mounted) return;
       setState(() => _duration = d);
     });
 
-    _audioPlayer.onPositionChanged.listen((p) {
+    audioPlayer.onPositionChanged.listen((p) {
       if (!mounted) return;
       setState(() => _position = p);
     });
 
-    _audioPlayer.onPlayerComplete.listen((_) {
+    audioPlayer.onPlayerComplete.listen((_) {
       if (!mounted) return;
       setState(() {
         _isPlaying = false;
@@ -50,12 +62,20 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
   Future<void> _togglePlay(String? audioPath) async {
     if (audioPath == null) return;
+    final audioPlayer = _audioPlayer;
+    if (audioPlayer == null) return;
 
     if (_isPlaying) {
-      await _audioPlayer.pause();
+      await audioPlayer.pause();
       if (mounted) setState(() => _isPlaying = false);
     } else {
-      await _audioPlayer.play(DeviceFileSource(audioPath));
+      final atEnd =
+          _duration.inMilliseconds > 0 &&
+          _position.inMilliseconds >= _playableEndPosition().inMilliseconds;
+      await audioPlayer.play(
+        DeviceFileSource(audioPath),
+        position: atEnd ? Duration.zero : _position,
+      );
       if (mounted) setState(() => _isPlaying = true);
     }
   }
@@ -100,241 +120,213 @@ class _ResultsScreenState extends State<ResultsScreen> {
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
+    _audioPlayer?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: PremiumBackdrop(
-        child: Consumer<ProcessingState>(
-          builder: (context, state, _) {
-            return CustomScrollView(
-              slivers: [
-                SliverAppBar(
-                  backgroundColor: Colors.transparent,
-                  surfaceTintColor: Colors.transparent,
-                  pinned: true,
-                  elevation: 0,
-                  expandedHeight: 140,
-                  leading: IconButton(
-                    icon: const Icon(Icons.arrow_back_ios_new_rounded),
-                    onPressed: () => state.clear(),
-                  ),
-                  actions: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.share_rounded,
-                        color: AppColors.cyan,
-                      ),
-                      onPressed: () => _shareResults(state),
-                    ),
-                  ],
-                  flexibleSpace: FlexibleSpaceBar(
-                    titlePadding: const EdgeInsetsDirectional.only(
-                      start: 16,
-                      bottom: 16,
-                    ),
-                    title: const Text(
-                      'Summary',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    background: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            AppColors.cyan.withAlpha(18),
-                            Colors.transparent,
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
-                  sliver: SliverList(
-                    delegate: SliverChildListDelegate([
-                      if (state.currentAudioPath != null)
-                        AnimatedEntrance(
-                          delay: const Duration(milliseconds: 60),
-                          child: _buildAudioPlayerCard(state.currentAudioPath!),
-                        ),
-                      if (state.currentAudioPath != null)
-                        const SizedBox(height: 16),
-                      if (state.summaryResult != null)
-                        AnimatedEntrance(
-                          delay: const Duration(milliseconds: 120),
-                          child: _buildSummaryCard(state.summaryResult!),
-                        ),
-                      if (state.summaryResult != null)
-                        const SizedBox(height: 16),
-                      if (state.summaryResult != null &&
-                          state.summaryResult!.keyPoints.isNotEmpty)
-                        AnimatedEntrance(
-                          delay: const Duration(milliseconds: 180),
-                          child: _buildKeyPointsCard(
-                            state.summaryResult!.keyPoints,
-                          ),
-                        ),
-                      if (state.summaryResult != null &&
-                          state.summaryResult!.keyPoints.isNotEmpty)
-                        const SizedBox(height: 16),
-                      if (state.summaryResult != null &&
-                          state.summaryResult!.hasActionItems)
-                        AnimatedEntrance(
-                          delay: const Duration(milliseconds: 220),
-                          child: _buildActionItemsCard(
-                            state.summaryResult!.actionItems,
-                          ),
-                        ),
-                      if (state.summaryResult != null &&
-                          state.summaryResult!.hasActionItems)
-                        const SizedBox(height: 16),
-                      if (state.transcriptionResult != null)
-                        AnimatedEntrance(
-                          delay: const Duration(milliseconds: 260),
-                          child: _buildTranscriptCard(
-                            state.transcriptionResult!.text,
-                          ),
-                        ),
-                      const SizedBox(height: 16),
-                      AnimatedEntrance(
-                        delay: const Duration(milliseconds: 300),
-                        child: _buildMetadataRow(state),
-                      ),
-                    ]),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.read<ProcessingState>().clear(),
-        backgroundColor: AppColors.cyan,
-        icon: const Icon(Icons.add_rounded, color: Colors.white),
-        label: const Text(
-          'New Summary',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAudioPlayerCard(String audioPath) {
-    return PremiumSurface(
-      borderRadius: BorderRadius.circular(28),
-      borderColor: AppColors.cyan.withAlpha(24),
-      child: Column(
-        children: [
-          Row(
+    if (widget.debugAudioPath != null) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: PremiumBackdrop(
+          child: Column(
             children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: const LinearGradient(
-                    colors: [AppColors.cyan, AppColors.violet],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.cyan.withAlpha(40),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: IconButton(
-                  onPressed: () => _togglePlay(audioPath),
-                  icon: Icon(
-                    _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Voice note',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      audioPath.split('/').last,
-                      style: TextStyle(
-                        color: Colors.white.withAlpha(130),
-                        fontSize: 12,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              PremiumPill(
-                icon: Icons.timelapse_rounded,
-                label: _formatDuration(_duration),
-                color: AppColors.cyan,
+              const Expanded(child: SizedBox.expand()),
+              SafeArea(
+                top: false,
+                child: _buildAudioPlayerDock(widget.debugAudioPath!),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 6,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-            ),
-            child: Slider(
-              value: clampSliderValue(
-                _position.inMilliseconds.toDouble(),
-                sliderMaxFromDuration(_duration),
-              ),
-              max: sliderMaxFromDuration(_duration),
-              onChanged: (value) {
-                _audioPlayer.seek(Duration(milliseconds: value.toInt()));
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        ),
+      );
+    }
+
+    return Consumer<ProcessingState>(
+      builder: (context, state, _) {
+        return Scaffold(
+          backgroundColor: AppColors.background,
+          body: PremiumBackdrop(
+            child: Column(
               children: [
-                Text(
-                  _formatDuration(_position),
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(120),
-                    fontSize: 12,
+                Expanded(
+                  child: CustomScrollView(
+                    slivers: [
+                      SliverAppBar(
+                        backgroundColor: Colors.transparent,
+                        surfaceTintColor: Colors.transparent,
+                        pinned: true,
+                        elevation: 0,
+                        expandedHeight: 140,
+                        leading: IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                          onPressed: () => state.clear(),
+                        ),
+                        actions: [
+                          IconButton(
+                            icon: const Icon(
+                              Icons.share_rounded,
+                              color: AppColors.cyan,
+                            ),
+                            onPressed: () => _shareResults(state),
+                          ),
+                        ],
+                        flexibleSpace: FlexibleSpaceBar(
+                          titlePadding: const EdgeInsetsDirectional.only(
+                            start: 16,
+                            bottom: 16,
+                          ),
+                          title: const Text(
+                            'Summary',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          background: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  AppColors.cyan.withAlpha(18),
+                                  Colors.transparent,
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                        sliver: SliverList(
+                          delegate: SliverChildListDelegate([
+                            if (state.summaryResult != null)
+                              AnimatedEntrance(
+                                delay: const Duration(milliseconds: 120),
+                                child: _buildSummaryCard(state.summaryResult!),
+                              ),
+                            if (state.summaryResult != null)
+                              const SizedBox(height: 16),
+                            if (state.summaryResult != null &&
+                                state.summaryResult!.keyPoints.isNotEmpty)
+                              AnimatedEntrance(
+                                delay: const Duration(milliseconds: 180),
+                                child: _buildKeyPointsCard(
+                                  state.summaryResult!.keyPoints,
+                                ),
+                              ),
+                            if (state.summaryResult != null &&
+                                state.summaryResult!.keyPoints.isNotEmpty)
+                              const SizedBox(height: 16),
+                            if (state.summaryResult != null &&
+                                state.summaryResult!.hasActionItems)
+                              AnimatedEntrance(
+                                delay: const Duration(milliseconds: 220),
+                                child: _buildActionItemsCard(
+                                  state.summaryResult!.actionItems,
+                                ),
+                              ),
+                            if (state.summaryResult != null &&
+                                state.summaryResult!.hasActionItems)
+                              const SizedBox(height: 16),
+                            if (state.transcriptionResult != null)
+                              AnimatedEntrance(
+                                delay: const Duration(milliseconds: 260),
+                                child: _buildTranscriptCard(
+                                  state.transcriptionResult!.text,
+                                ),
+                              ),
+                            const SizedBox(height: 16),
+                            AnimatedEntrance(
+                              delay: const Duration(milliseconds: 300),
+                              child: _buildMetadataRow(state),
+                            ),
+                          ]),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  _formatDuration(_duration),
-                  style: TextStyle(
-                    color: Colors.white.withAlpha(120),
-                    fontSize: 12,
+                if (state.currentAudioPath != null)
+                  SafeArea(
+                    top: false,
+                    child: _buildAudioPlayerDock(state.currentAudioPath!),
                   ),
-                ),
               ],
             ),
           ),
-        ],
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => context.read<ProcessingState>().clear(),
+            backgroundColor: AppColors.cyan,
+            icon: const Icon(Icons.add_rounded, color: Colors.white),
+            label: const Text(
+              'New Summary',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAudioPlayerDock(String audioPath) {
+    return CompactPlaybackStrip(
+      isPlaying: _isPlaying,
+      position: _position,
+      duration: _duration,
+      onTogglePlay: () => _togglePlay(audioPath),
+      onSeek: (value) {
+        _seekPlayback(value);
+      },
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+    );
+  }
+
+  Future<void> _seekPlayback(Duration value) async {
+    final audioPlayer = _audioPlayer;
+    if (audioPlayer == null) return;
+
+    final safePosition = _clampPlayablePosition(value);
+    if (mounted) {
+      setState(() {
+        _position = safePosition;
+        if (_isPlaying &&
+            _duration > Duration.zero &&
+            safePosition >= _playableEndPosition()) {
+          _isPlaying = false;
+        }
+      });
+    }
+
+    await audioPlayer.seek(safePosition);
+
+    if (_duration > Duration.zero && safePosition >= _playableEndPosition()) {
+      await audioPlayer.pause();
+    }
+  }
+
+  Duration _clampPlayablePosition(Duration value) {
+    if (_duration <= Duration.zero) return value;
+    if (value <= Duration.zero) return Duration.zero;
+    final playableEnd = _playableEndPosition();
+    return value > playableEnd ? playableEnd : value;
+  }
+
+  Duration _playableEndPosition() {
+    if (_duration <= Duration.zero) return Duration.zero;
+    final guard = _duration.inMilliseconds < 1000
+        ? _duration.inMilliseconds ~/ 2
+        : 500;
+    return Duration(
+      milliseconds: (_duration.inMilliseconds - guard).clamp(
+        0,
+        _duration.inMilliseconds,
       ),
     );
   }
@@ -595,11 +587,5 @@ class _ResultsScreenState extends State<ResultsScreen> {
         ),
       ],
     );
-  }
-
-  String _formatDuration(Duration d) {
-    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
   }
 }

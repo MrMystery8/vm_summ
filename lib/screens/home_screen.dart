@@ -104,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     final state = context.read<ProcessingState>();
     if (state.modelStatus != ModelStatus.ready) {
-      await state.initialize();
+      unawaited(state.initialize());
     }
   }
 
@@ -187,10 +187,16 @@ class _HomeScreenState extends State<HomeScreen> {
       if (file != null && mounted) {
         final state = context.read<ProcessingState>();
         state.queueFile(file);
-        widget.onProcessingStart?.call();
+        if (state.modelStatus == ModelStatus.ready) {
+          widget.onProcessingStart?.call();
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Recording added to queue'),
+          SnackBar(
+            content: Text(
+              state.modelStatus == ModelStatus.ready
+                  ? 'Recording added to queue'
+                  : 'Recording queued. Processing starts when the model is ready.',
+            ),
             backgroundColor: Color(0xFF00D9FF),
             duration: Duration(seconds: 1),
           ),
