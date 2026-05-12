@@ -6,6 +6,7 @@ import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
 import com.google.ai.edge.litertlm.SamplerConfig
@@ -121,7 +122,9 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         when (call.method) {
             "initialize" -> initialize(call, result)
             "transcribe" -> transcribe(call, result)
+            "transcribeSegment" -> transcribeSegment(call, result)
             "transcribeAndSummarize" -> transcribeAndSummarize(call, result)
+            "summarizeTranscript" -> summarizeTranscript(call, result)
             "generateResponse" -> generateResponse(call, result)
             "chat" -> chat(call, result)
             "chatStream" -> chatStream(call, result)
@@ -174,7 +177,43 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             mutex.withLock {
                 try {
                     val transcript = doTranscribe(audioPath, transcriptionSystem, transcriptionPrompt)
-                    mainHandler.post { result.success(transcript) }
+                    mainHandler.post { result.success(mapOf("transcript" to transcript, "response" to transcript)) }
+                } catch (e: Exception) {
+                    mainHandler.post { result.error("TRANSCRIPTION_FAILED", e.message, null) }
+                }
+            }
+        }
+    }
+
+    private fun transcribeSegment(call: MethodCall, result: Result) {
+        val audioPath = call.argument<String>("path") ?: call.argument<String>("audioPath")
+        val segmentIndex = call.argument<Int>("segmentIndex") ?: -1
+        val segmentCount = call.argument<Int>("segmentCount") ?: -1
+
+        if (audioPath == null) {
+            result.error("INVALID_ARGS", "audioPath required", null)
+            return
+        }
+        if (segmentIndex <= 0 || segmentCount <= 0) {
+            result.error("INVALID_ARGS", "segmentIndex and segmentCount required", null)
+            return
+        }
+
+        GemmaRuntime.scope.launch {
+            mutex.withLock {
+                try {
+                    Log.d(TAG, "Transcribing segment $segmentIndex/$segmentCount: $audioPath")
+                    val transcript = doTranscribe(audioPath, null, null)
+                    mainHandler.post {
+                        result.success(
+                            mapOf(
+                                "transcript" to transcript,
+                                "response" to transcript,
+                                "segmentIndex" to segmentIndex,
+                                "segmentCount" to segmentCount,
+                            )
+                        )
+                    }
                 } catch (e: Exception) {
                     mainHandler.post { result.error("TRANSCRIPTION_FAILED", e.message, null) }
                 }
@@ -204,6 +243,31 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
                     combined["transcript"] = transcript
                     combined["response"] = transcript // redundant but safe
                     
+                    mainHandler.post { result.success(combined) }
+                } catch (e: Exception) {
+                    mainHandler.post { result.error("PROCESS_FAILED", e.message, null) }
+                }
+            }
+        }
+    }
+
+    private fun summarizeTranscript(call: MethodCall, result: Result) {
+        val transcript = call.argument<String>("transcript")
+        val systemInstruction = call.argument<String>("systemInstruction")
+        val queryInstruction = call.argument<String>("queryInstruction")
+
+        if (transcript.isNullOrBlank()) {
+            result.error("INVALID_ARGS", "transcript required", null)
+            return
+        }
+
+        GemmaRuntime.scope.launch {
+            mutex.withLock {
+                try {
+                    val summaryMap = doSummarize(transcript, systemInstruction, queryInstruction)
+                    val combined = summaryMap.toMutableMap()
+                    combined["transcript"] = transcript
+                    combined["response"] = transcript
                     mainHandler.post { result.success(combined) }
                 } catch (e: Exception) {
                     mainHandler.post { result.error("PROCESS_FAILED", e.message, null) }
@@ -287,6 +351,7 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
     private suspend fun doTranscribe(audioPath: String, systemInstruction: String?, promptInstruction: String?): String {
         val modelFile = ModelStore.ensureModelReady(context)
         val audioBytes = File(audioPath).also { validateWav(it) }.readBytes()
+        val transcriptionTimeoutSeconds = computeTranscriptionTimeoutSeconds(audioBytes.size)
         
         val sysMsg = systemInstruction ?: TRANSCRIPTION_SYSTEM
         val config = ConversationConfig(
@@ -301,7 +366,18 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             Content.Text(promptText)
         ))
         
-        return withEngineRetry(modelFile) { eng -> runInference(eng, config, message) }
+        Log.d(
+            TAG,
+            "Transcription timeout budget: ${transcriptionTimeoutSeconds}s for audioBytes=${audioBytes.size}",
+        )
+        return withEngineRetry(modelFile) { eng ->
+            runInference(
+                engine = eng,
+                config = config,
+                message = message,
+                timeoutSeconds = transcriptionTimeoutSeconds,
+            )
+        }
     }
     
     private suspend fun doSummarize(transcript: String, systemInstruction: String?, queryInstruction: String?): Map<String, Any?> {
@@ -365,7 +441,12 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
         return withEngineRetry(modelFile) { eng -> runInference(eng, config, message) }
     }
     
-    private suspend fun runInference(engine: Engine, config: ConversationConfig, message: Message): String = 
+    private suspend fun runInference(
+        engine: Engine,
+        config: ConversationConfig,
+        message: Message,
+        timeoutSeconds: Long = 300,
+    ): String =
         withContext(Dispatchers.IO) {
             val sb = StringBuilder()
             val latch = java.util.concurrent.CountDownLatch(1)
@@ -373,19 +454,28 @@ Write a brief 2-3 sentence paragraph summarizing the main content and purpose.
             
             engine.createConversation(config).use { conv ->
                 conv.sendMessageAsync(message, object : MessageCallback {
-                    override fun onMessage(msg: Message) { sb.append(msg.toString()) }
+                    override fun onMessage(msg: Message) { 
+                        sb.append(msg.toString()) 
+                    }
                     override fun onDone() { latch.countDown() }
                     override fun onError(t: Throwable) { error = t.message; latch.countDown() }
                 })
                 
-                if (!latch.await(90, java.util.concurrent.TimeUnit.SECONDS)) {
-                    throw Exception("Timeout")
+                if (!latch.await(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw Exception("Inference Timeout after ${timeoutSeconds}s")
                 }
                 error?.let { throw Exception(it) }
             }
             
             sb.toString().trim()
         }
+
+    private fun computeTranscriptionTimeoutSeconds(audioByteCount: Int): Long {
+        // Converted WAV is 16kHz mono 16-bit PCM => ~32KB/sec.
+        val approxDurationSeconds = (audioByteCount / 32_000.0).toLong().coerceAtLeast(1L)
+        // Keep floor for short clips; scale up for longer recordings.
+        return (approxDurationSeconds * 3).coerceIn(300L, 1200L)
+    }
         
     private suspend fun runTextInferenceStream(transcript: String, userPrompt: String) {
         val modelFile = ModelStore.ensureModelReady(context)

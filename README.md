@@ -98,11 +98,18 @@ Handles the heavy lifting: AI model loading and inference.
 
 ### 1. Model Setup
 This app bundles the **Gemma 4 E2B** LiteRT-LM artifact in the APK.
+The Android integration pins **LiteRT-LM 0.11.0+** for Gemma 4 speculative-decoding compatibility on supported GPU devices.
 1.  Download `gemma-4-E2B-it.litertlm` from [`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm).
 2.  Verify the SHA256 is `ab7838cdfc8f77e54d8ca45eadceb20452d9f01e4bfade03e5dce27911b27e42`.
 3.  Place it in: `android/app/src/main/assets/gemma-4-E2B-it.litertlm`
 
 *(Note: The bundled model is ~2.58GB and is intentionally packaged with the app.)*
+
+### 1.1 Runtime Notes
+*   **MTP readiness rollout:** The runtime probes speculative-decoding support and preloads sampler libraries on supported GPU devices.
+*   **No model swap required:** The initial rollout keeps the existing bundled Gemma 4 E2B `.litertlm` artifact and does not require an app-level model family change.
+*   **CPU fallback:** CPU fallback and emulator paths keep speculative decoding disabled in this version to avoid regressions on non-GPU execution paths.
+*   **E4B remains optional:** Gemma 4 E4B is not bundled here. It would require a larger asset, more device-capacity validation, and a separate product decision.
 
 ### 2. Build & Run
 **CRITICAL:** You must run in **Release Mode**. Debug mode adds overhead that makes the AI too slow to function.
@@ -138,7 +145,7 @@ flutter run --release
 
 *   **App Crash on First Run:** The app needs time on the *very first launch* to copy the bundled 2.58GB model into internal storage. Do not kill the app.
 *   **Processing Stuck:** Force close the app. The queue system handles "Orphaned Locks" and will mark stuck items as "Failed" on next launch so you can retry.
-*   **"TF_LITE_ERROR":** Ensure `android/app/src/main/assets/gemma-4-E2B-it.litertlm` is the bundled model and run on a device with GPU/NPU support.
+*   **"TF_LITE_ERROR":** Ensure `android/app/src/main/assets/gemma-4-E2B-it.litertlm` is the bundled model, LiteRT-LM is at `0.11.0+`, and run on a device with GPU/NPU support.
 
 ---
 

@@ -117,6 +117,37 @@ class FakeGemmaAudioService extends GemmaAudioService {
   }
 
   @override
+  Future<GemmaAudioResult> transcribeAndSummarizeLongAudio(
+    File audioFile, {
+    String? language,
+    String? systemInstruction,
+    String? queryInstruction,
+    String? transcriptionSystem,
+    String? transcriptionPrompt,
+    void Function(LongAudioPhaseUpdate update)? onPhaseUpdate,
+  }) async {
+    lastSystemInstruction = systemInstruction;
+    lastQueryInstruction = queryInstruction;
+    lastTranscriptionSystem = transcriptionSystem;
+    lastTranscriptionPrompt = transcriptionPrompt;
+    events?.add('gemma.transcribeAndSummarizeLongAudio');
+    if (transcribeDelay > Duration.zero) {
+      await Future<void>.delayed(transcribeDelay);
+    }
+    onPhaseUpdate?.call(const LongAudioPhaseUpdate(phase: 'transcribe'));
+    onPhaseUpdate?.call(const LongAudioPhaseUpdate(phase: 'summarize'));
+
+    return GemmaAudioResult(
+      response: 'response',
+      transcript: 'transcript',
+      title: null,
+      summary: 'Test summary',
+      keyPoints: const ['Point one'],
+      actionItems: 'None',
+    );
+  }
+
+  @override
   Future<String> chatWithTranscript(String transcript, String prompt) async {
     events?.add('gemma.chat');
     return 'Chunk summary';
@@ -873,7 +904,7 @@ void main() {
       expect(foreground.running, isFalse);
       expect(foreground.events.last, 'foreground.stop');
       expect(events, contains('audio.convert'));
-      expect(events, contains('gemma.transcribeAndSummarize'));
+      expect(events, contains('gemma.transcribeAndSummarizeLongAudio'));
     },
   );
 

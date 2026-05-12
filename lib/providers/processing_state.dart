@@ -500,7 +500,6 @@ Interview subject/topic
       await _loadSettings();
       await _loadQueue();
       await _clearOrphanedLock();
-
       if (_enableBackgroundServices) {
         try {
           await _initShareHandler();
@@ -560,6 +559,21 @@ Interview subject/topic
     }
   }
 
+  Future<void> _updateForegroundServiceNotification({
+    required String title,
+    required String text,
+  }) async {
+    if (!_enableBackgroundServices) return;
+    try {
+      await FlutterForegroundTask.updateService(
+        notificationTitle: title,
+        notificationText: text,
+      );
+    } catch (e) {
+      debugPrint('Queue: Foreground service update unavailable: $e');
+    }
+  }
+
   // Queue getters for UI
   List<QueueItem> get queueItems => List.unmodifiable(_queueItems);
   int get queueCount => _queueItems.length;
@@ -587,7 +601,6 @@ Interview subject/topic
         .toList(),
   );
 
-  @visibleForTesting
   Future<void> get startupReady => _startupFuture;
 
   @visibleForTesting
@@ -1438,7 +1451,7 @@ Interview subject/topic
         rethrow;
       }
 
-      // Step 2: Process with Gemma (transcription + summarization in one pass)
+      // Step 2: Process with Gemma
       _startProcessingProgressEstimate(
         status: ProcessingStatus.processing,
         message: 'Transcribing and summarizing...',
@@ -1447,9 +1460,50 @@ Interview subject/topic
         duration: _estimateInferenceDuration(audioFile),
       );
 
-      // Process with Gemma (using custom prompts if set)
+      // Process with Gemma
       try {
-        _gemmaResult = await _transcribeAndSummarizeWithFallback(wavFile);
+        _gemmaResult = await _gemmaService.transcribeAndSummarizeLongAudio(
+          wavFile,
+          systemInstruction: _systemInstruction.isNotEmpty
+              ? _systemInstruction
+              : null,
+          queryInstruction: _queryInstruction.isNotEmpty
+              ? _queryInstruction
+              : null,
+          transcriptionSystem: _transcriptionSystemInstruction.isNotEmpty
+              ? _transcriptionSystemInstruction
+              : null,
+          transcriptionPrompt: _transcriptionPrompt.isNotEmpty
+              ? _transcriptionPrompt
+              : null,
+          onPhaseUpdate: (phase) async {
+            String message;
+            switch (phase.phase) {
+              case 'transcribe':
+                message = 'Transcribing audio...';
+                break;
+              case 'transcribe_segment':
+                message =
+                    'Transcribing segment ${phase.segmentIndex}/${phase.segmentCount}...';
+                break;
+              case 'merge':
+                message = 'Merging transcript segments...';
+                break;
+              case 'summarize':
+                message = 'Summarizing transcript...';
+                break;
+              default:
+                message = 'Processing voice note...';
+                break;
+            }
+            _updateStatus(ProcessingStatus.processing, message, _progress);
+            await _updateForegroundServiceNotification(
+              title: 'Processing Voice Notes',
+              text: message,
+            );
+            debugPrint('Queue phase: ${phase.phase}');
+          },
+        );
         debugPrint(
           'Gemma result: ${_gemmaResult?.response.substring(0, _gemmaResult!.response.length.clamp(0, 100))}...',
         );
@@ -1511,216 +1565,6 @@ Interview subject/topic
       } catch (_) {}
     }
     return null;
-  }
-
-  Future<GemmaAudioResult> _transcribeAndSummarizeWithFallback(
-    File wavFile,
-  ) async {
-    try {
-      return await _gemmaService.transcribeAndSummarize(
-        wavFile,
-        systemInstruction: _systemInstruction.isNotEmpty
-            ? _systemInstruction
-            : null,
-        queryInstruction: _queryInstruction.isNotEmpty
-            ? _queryInstruction
-            : null,
-        transcriptionSystem: _transcriptionSystemInstruction.isNotEmpty
-            ? _transcriptionSystemInstruction
-            : null,
-        transcriptionPrompt: _transcriptionPrompt.isNotEmpty
-            ? _transcriptionPrompt
-            : null,
-      );
-    } catch (e) {
-      if (!_isTokenOverflowError(e)) rethrow;
-
-      debugPrint('Queue: Falling back to chunked summarization: $e');
-      final transcript = await _transcribeOnly(wavFile);
-      final summary = await _summarizeLargeTranscript(transcript);
-      return summary;
-    }
-  }
-
-  Future<String> _transcribeOnly(File wavFile) async {
-    final result = await _gemmaService.transcribe(wavFile, language: null);
-    final transcript = result.transcript ?? result.response;
-    if (transcript.trim().isEmpty) {
-      throw Exception('Transcript is empty');
-    }
-    return transcript.trim();
-  }
-
-  Future<GemmaAudioResult> _summarizeLargeTranscript(String transcript) async {
-    final chunks = _splitTranscriptIntoChunks(
-      transcript,
-      maxWordsPerChunk: 220,
-      overlapWords: 25,
-    );
-
-    final chunkNotes = <String>[];
-    for (var i = 0; i < chunks.length; i++) {
-      final chunk = chunks[i];
-      final chunkPrompt =
-          'Summarize this section of a longer voice note in 2-4 concise sentences. '
-          'Preserve names, dates, decisions, and action items. '
-          'Do not add a title or markdown. Section ${i + 1} of ${chunks.length}.';
-      final note = await _gemmaService.chatWithTranscript(chunk, chunkPrompt);
-      final cleaned = note.trim();
-      if (cleaned.isNotEmpty) {
-        chunkNotes.add(cleaned);
-      }
-    }
-
-    final combinedNotes = chunkNotes.isEmpty
-        ? transcript
-        : chunkNotes
-              .asMap()
-              .entries
-              .map((entry) {
-                final index = entry.key + 1;
-                return 'Chunk $index:\n${entry.value}';
-              })
-              .join('\n\n');
-
-    final finalPrompt =
-        'Combine the following section notes into the final summary. '
-        'Return exact markdown with the headings TITLE, SUMMARY, KEY POINTS, and ACTION ITEMS. '
-        'Keep the title short, the summary to 2-3 sentences, and key points to 3-5 bullets. '
-        'If there are no action items, write None. Do not mention chunking.';
-    final finalResponse = await _gemmaService.chatWithTranscript(
-      combinedNotes,
-      finalPrompt,
-    );
-
-    return _parseStructuredGemmaResponse(
-      finalResponse,
-      transcript: transcript,
-      rawResponse: finalResponse,
-    );
-  }
-
-  List<String> _splitTranscriptIntoChunks(
-    String transcript, {
-    required int maxWordsPerChunk,
-    required int overlapWords,
-  }) {
-    final words = transcript
-        .split(RegExp(r'\s+'))
-        .where((word) => word.trim().isNotEmpty)
-        .toList();
-    if (words.isEmpty) return [transcript];
-
-    final chunks = <String>[];
-    var start = 0;
-    while (start < words.length) {
-      final end = (start + maxWordsPerChunk).clamp(0, words.length);
-      chunks.add(words.sublist(start, end).join(' '));
-      if (end >= words.length) break;
-      start = end - overlapWords;
-      if (start < 0) start = 0;
-      if (start >= words.length) break;
-    }
-    return chunks;
-  }
-
-  bool _isTokenOverflowError(Object error) {
-    final message = error.toString().toLowerCase();
-    return message.contains('input token ids are too long') ||
-        message.contains('exceeding the maximum number of tokens') ||
-        message.contains('status code: 3');
-  }
-
-  GemmaAudioResult _parseStructuredGemmaResponse(
-    String response, {
-    required String transcript,
-    required String rawResponse,
-  }) {
-    final lines = response.split(RegExp(r'\r?\n'));
-    var section = '';
-    String? titleLine;
-    final summaryLines = <String>[];
-    final keyPointLines = <String>[];
-    final actionLines = <String>[];
-
-    for (final line in lines) {
-      final trimmed = line.trim();
-      final lower = trimmed.toLowerCase();
-
-      if (lower.contains('## title') ||
-          lower.contains('**title**') ||
-          lower.startsWith('title:') ||
-          lower == 'title') {
-        section = 'title';
-        continue;
-      }
-      if (lower.contains('## summary') ||
-          lower.contains('**summary**') ||
-          lower.startsWith('summary:') ||
-          lower == 'summary') {
-        section = 'summary';
-        continue;
-      }
-      if (lower.contains('## key points') ||
-          lower.contains('**key points**') ||
-          lower.startsWith('key points:') ||
-          lower == 'key points') {
-        section = 'keypoints';
-        continue;
-      }
-      if (lower.contains('## action items') ||
-          lower.contains('**action items**') ||
-          lower.startsWith('action items:') ||
-          lower == 'action items') {
-        section = 'actions';
-        continue;
-      }
-
-      if (trimmed.isEmpty || trimmed.startsWith('##')) continue;
-
-      final cleaned = trimmed.replaceFirst(RegExp(r'^[•\-\*]\s*'), '').trim();
-      if (cleaned.isEmpty) continue;
-
-      switch (section) {
-        case 'title':
-          titleLine ??= cleaned;
-          break;
-        case 'summary':
-          summaryLines.add(cleaned);
-          break;
-        case 'keypoints':
-          keyPointLines.add(cleaned);
-          break;
-        case 'actions':
-          if (!cleaned.toLowerCase().contains('none')) {
-            actionLines.add(cleaned);
-          }
-          break;
-        default:
-          if (summaryLines.length < 3) {
-            summaryLines.add(cleaned);
-          }
-      }
-    }
-
-    titleLine ??= summaryLines.isNotEmpty
-        ? summaryLines.first.length > 50
-              ? summaryLines.first.substring(0, 50)
-              : summaryLines.first
-        : transcript.split(RegExp(r'\s+')).take(6).join(' ');
-
-    final title = titleLine.trim();
-
-    return GemmaAudioResult(
-      response: rawResponse,
-      transcript: transcript,
-      title: title.isNotEmpty ? title : null,
-      summary: summaryLines.isNotEmpty
-          ? summaryLines.join(' ')
-          : 'No summary generated.',
-      keyPoints: keyPointLines.take(5).toList(),
-      actionItems: actionLines.isNotEmpty ? actionLines.join('\n') : 'None',
-    );
   }
 
   void _updateStatus(ProcessingStatus status, String message, double progress) {

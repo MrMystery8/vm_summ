@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel.Result
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.io.BufferedOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -114,75 +115,87 @@ class AudioConverterPlugin: FlutterPlugin, MethodCallHandler {
             decoder.configure(inputFormat, null, null, 0)
             decoder.start()
 
-            val pcmData = mutableListOf<ByteArray>()
-            var totalBytes = 0
+            val tmpPcmFile = File.createTempFile("decoded_pcm_", ".raw", inputFile.parentFile)
+            var totalBytes = 0L
+            val pcmOut = BufferedOutputStream(FileOutputStream(tmpPcmFile))
 
             val timeoutUs = 10000L
             var isEos = false
             val bufferInfo = MediaCodec.BufferInfo()
 
-            while (!isEos) {
-                val inputBufferIndex = decoder.dequeueInputBuffer(timeoutUs)
-                if (inputBufferIndex >= 0) {
-                    val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
-                    if (inputBuffer != null) {
-                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                        if (sampleSize < 0) {
-                            decoder.queueInputBuffer(
-                                inputBufferIndex, 0, 0, 0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                            )
-                        } else {
-                            decoder.queueInputBuffer(
-                                inputBufferIndex, 0, sampleSize,
-                                extractor.sampleTime, 0
-                            )
-                            extractor.advance()
+            try {
+                while (!isEos) {
+                    val inputBufferIndex = decoder.dequeueInputBuffer(timeoutUs)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = decoder.getInputBuffer(inputBufferIndex)
+                        if (inputBuffer != null) {
+                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                            if (sampleSize < 0) {
+                                decoder.queueInputBuffer(
+                                    inputBufferIndex, 0, 0, 0,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                )
+                            } else {
+                                decoder.queueInputBuffer(
+                                    inputBufferIndex, 0, sampleSize,
+                                    extractor.sampleTime, 0
+                                )
+                                extractor.advance()
+                            }
                         }
                     }
-                }
 
-                val outputBufferIndex = decoder.dequeueOutputBuffer(bufferInfo, timeoutUs)
-                when {
-                    outputBufferIndex >= 0 -> {
-                        val outputBuffer = decoder.getOutputBuffer(outputBufferIndex)
-                        if (outputBuffer != null && bufferInfo.size > 0) {
-                            outputBuffer.position(bufferInfo.offset)
-                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                            val chunk = ByteArray(bufferInfo.size)
-                            outputBuffer.get(chunk)
-                            pcmData.add(chunk)
-                            totalBytes += chunk.size
-                        }
-                        decoder.releaseOutputBuffer(outputBufferIndex, false)
+                    val outputBufferIndex = decoder.dequeueOutputBuffer(bufferInfo, timeoutUs)
+                    when {
+                        outputBufferIndex >= 0 -> {
+                            val outputBuffer = decoder.getOutputBuffer(outputBufferIndex)
+                            if (outputBuffer != null && bufferInfo.size > 0) {
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                                val chunk = ByteArray(bufferInfo.size)
+                                outputBuffer.get(chunk)
+                                pcmOut.write(chunk)
+                                totalBytes += chunk.size.toLong()
+                            }
+                            decoder.releaseOutputBuffer(outputBufferIndex, false)
 
-                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            isEos = true
+                            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                isEos = true
+                            }
                         }
+                        outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ||
+                            outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                     }
-                    outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ||
-                        outputBufferIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> Unit
                 }
+            } finally {
+                pcmOut.flush()
+                pcmOut.close()
             }
 
-            if (totalBytes == 0) {
+            if (totalBytes == 0L) {
                 throw Exception("No audio data decoded")
             }
 
-            val allPcm = ByteArray(totalBytes)
-            var offset = 0
-            for (chunk in pcmData) {
-                System.arraycopy(chunk, 0, allPcm, offset, chunk.size)
-                offset += chunk.size
-            }
-
-            val resampledData = if (inputSampleRate != targetSampleRate || inputChannels != targetChannels) {
-                resamplePcm(allPcm, inputSampleRate, inputChannels, targetSampleRate, targetChannels)
+            if (inputSampleRate != targetSampleRate || inputChannels != targetChannels) {
+                val allPcm = tmpPcmFile.readBytes()
+                val resampledData = resamplePcm(
+                    allPcm,
+                    inputSampleRate,
+                    inputChannels,
+                    targetSampleRate,
+                    targetChannels,
+                )
+                writeWavFile(outputPath, resampledData, targetSampleRate, targetChannels)
             } else {
-                allPcm
+                writeWavFromPcmFile(
+                    outputPath = outputPath,
+                    pcmFile = tmpPcmFile,
+                    pcmSize = totalBytes,
+                    sampleRate = targetSampleRate,
+                    channels = targetChannels,
+                )
             }
-
-            writeWavFile(outputPath, resampledData, targetSampleRate, targetChannels)
+            tmpPcmFile.delete()
 
             return true
         } finally {
@@ -277,5 +290,36 @@ class AudioConverterPlugin: FlutterPlugin, MethodCallHandler {
         fos.write(buffer.array())
         fos.write(pcmData)
         fos.close()
+    }
+
+    private fun writeWavFromPcmFile(
+        outputPath: String,
+        pcmFile: File,
+        pcmSize: Long,
+        sampleRate: Int,
+        channels: Int
+    ) {
+        val bitsPerSample = 16
+        val byteRate = sampleRate * channels * bitsPerSample / 8
+        val blockAlign = channels * bitsPerSample / 8
+
+        FileOutputStream(outputPath).use { fos ->
+            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            header.put("RIFF".toByteArray())
+            header.putInt(36 + pcmSize.toInt())
+            header.put("WAVE".toByteArray())
+            header.put("fmt ".toByteArray())
+            header.putInt(16)
+            header.putShort(1)
+            header.putShort(channels.toShort())
+            header.putInt(sampleRate)
+            header.putInt(byteRate)
+            header.putShort(blockAlign.toShort())
+            header.putShort(bitsPerSample.toShort())
+            header.put("data".toByteArray())
+            header.putInt(pcmSize.toInt())
+            fos.write(header.array())
+            pcmFile.inputStream().use { input -> input.copyTo(fos) }
+        }
     }
 }

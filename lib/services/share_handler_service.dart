@@ -119,11 +119,6 @@ class ShareHandlerService {
     }
   }
 
-  /// Check if file is an audio file we can process
-  bool _isAudioFile(String path) {
-    return AudioConverter.isSupportedInputPath(path);
-  }
-
   /// Save shared file to documents directory
   Future<File> _saveToDocuments(File sourceFile) async {
     final docsDir = await getApplicationDocumentsDirectory();

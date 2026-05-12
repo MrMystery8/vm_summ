@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -54,6 +55,94 @@ class GemmaAudioResult {
   /// Check if we have structured output
   bool get hasStructuredOutput =>
       transcript != null || summary != null || keyPoints.isNotEmpty;
+
+  static GemmaAudioResult parse(String response, {required String transcript}) {
+    final lines = response.split(RegExp(r'\r?\n'));
+    var section = '';
+    String? titleLine;
+    final summaryLines = <String>[];
+    final keyPointLines = <String>[];
+    final actionLines = <String>[];
+
+    for (final line in lines) {
+      final trimmed = line.trim();
+      final lower = trimmed.toLowerCase();
+
+      if (lower.contains('## title') ||
+          lower.contains('**title**') ||
+          lower.startsWith('title:') ||
+          lower == 'title') {
+        section = 'title';
+        continue;
+      }
+      if (lower.contains('## summary') ||
+          lower.contains('**summary**') ||
+          lower.startsWith('summary:') ||
+          lower == 'summary') {
+        section = 'summary';
+        continue;
+      }
+      if (lower.contains('## key points') ||
+          lower.contains('**key points**') ||
+          lower.startsWith('key points:') ||
+          lower == 'key points') {
+        section = 'keypoints';
+        continue;
+      }
+      if (lower.contains('## action items') ||
+          lower.contains('**action items**') ||
+          lower.startsWith('action items:') ||
+          lower == 'action items') {
+        section = 'actions';
+        continue;
+      }
+
+      if (trimmed.isEmpty || trimmed.startsWith('##')) continue;
+
+      final cleaned = trimmed.replaceFirst(RegExp(r'^[•\-\*]\s*'), '').trim();
+      if (cleaned.isEmpty) continue;
+
+      switch (section) {
+        case 'title':
+          titleLine ??= cleaned;
+          break;
+        case 'summary':
+          summaryLines.add(cleaned);
+          break;
+        case 'keypoints':
+          keyPointLines.add(cleaned);
+          break;
+        case 'actions':
+          if (!cleaned.toLowerCase().contains('none')) {
+            actionLines.add(cleaned);
+          }
+          break;
+        default:
+          if (summaryLines.length < 3) {
+            summaryLines.add(cleaned);
+          }
+      }
+    }
+
+    titleLine ??= summaryLines.isNotEmpty
+        ? summaryLines.first.length > 50
+              ? summaryLines.first.substring(0, 50)
+              : summaryLines.first
+        : transcript.split(RegExp(r'\s+')).take(6).join(' ');
+
+    final title = titleLine.trim();
+
+    return GemmaAudioResult(
+      response: response,
+      transcript: transcript,
+      title: title.isNotEmpty ? title : null,
+      summary: summaryLines.isNotEmpty
+          ? summaryLines.join(' ')
+          : 'No summary generated.',
+      keyPoints: keyPointLines.take(5).toList(),
+      actionItems: actionLines.isNotEmpty ? actionLines.join('\n') : 'None',
+    );
+  }
 
   @override
   String toString() {
@@ -169,6 +258,8 @@ class GemmaAudioService {
   String? _modelPath;
   StreamSubscription<dynamic>? _progressSubscription;
 
+  static const int _bytesPerSecond16kMonoPcm = 32000;
+
   /// Whether the service is initialized with a loaded model
   bool get isInitialized => _initialized;
 
@@ -177,6 +268,8 @@ class GemmaAudioService {
 
   /// Check if we're on a supported platform (Android)
   static bool get isPlatformSupported => Platform.isAndroid;
+
+  LongAudioConfig longAudioConfig = const LongAudioConfig();
 
   // ============================================================
   // Model Management
@@ -428,6 +521,26 @@ class GemmaAudioService {
     }
   }
 
+  /// Transcribe a specific time range from an audio file.
+  Future<GemmaAudioResult> transcribeSegment(
+    File audioFile, {
+    required int segmentIndex,
+    required int segmentCount,
+  }) async {
+    await _ensureReady();
+
+    try {
+      final result = await _audioChannel.invokeMethod('transcribeSegment', {
+        'audioPath': audioFile.path,
+        'segmentIndex': segmentIndex,
+        'segmentCount': segmentCount,
+      });
+      return GemmaAudioResult.fromMap(result as Map);
+    } on PlatformException catch (e) {
+      throw Exception('Segment transcription failed: ${e.message}');
+    }
+  }
+
   /// Transcribe and summarize audio in one pass.
   ///
   /// This is the recommended method for voice note processing.
@@ -463,6 +576,26 @@ class GemmaAudioService {
       return GemmaAudioResult.fromMap(result as Map);
     } on PlatformException catch (e) {
       throw Exception('Transcription and summarization failed: ${e.message}');
+    }
+  }
+
+  /// Summarize an existing transcript with optional custom instructions.
+  Future<GemmaAudioResult> summarizeTranscript(
+    String transcript, {
+    String? systemInstruction,
+    String? queryInstruction,
+  }) async {
+    await _ensureReady();
+
+    try {
+      final result = await _audioChannel.invokeMethod('summarizeTranscript', {
+        'transcript': transcript,
+        if (systemInstruction != null) 'systemInstruction': systemInstruction,
+        if (queryInstruction != null) 'queryInstruction': queryInstruction,
+      });
+      return GemmaAudioResult.fromMap(result as Map);
+    } on PlatformException catch (e) {
+      throw Exception('Transcript summarization failed: ${e.message}');
     }
   }
 
@@ -580,23 +713,278 @@ class GemmaAudioService {
     );
   }
 
-  /// Process audio in chunks for files longer than 30 seconds.
-  ///
-  /// Automatically splits audio into 30s chunks and combines results.
-  /// Note: This is a simple concatenation - context is not shared between chunks.
+  /// Process long recordings by chunking the transcript when needed.
   Future<GemmaAudioResult> transcribeAndSummarizeLongAudio(
     File audioFile, {
     String? language,
-    int chunkDurationSeconds = 30,
+    String? systemInstruction,
+    String? queryInstruction,
+    String? transcriptionSystem,
+    String? transcriptionPrompt,
+    void Function(LongAudioPhaseUpdate update)? onPhaseUpdate,
   }) async {
     await _ensureReady();
 
-    // TODO: Implement actual chunking with audio duration detection
-    // For now, just process as single chunk
-    debugPrint(
-      'GemmaAudioService: Long audio chunking not yet implemented, processing as single chunk',
+    onPhaseUpdate?.call(const LongAudioPhaseUpdate(phase: 'transcribe'));
+    final fullTranscript = await _transcribeWithHybridStrategy(
+      audioFile: audioFile,
+      language: language,
+      onPhaseUpdate: onPhaseUpdate,
     );
-    return transcribeAndSummarize(audioFile, language: language);
+    if (fullTranscript.trim().length < 10) {
+      return GemmaAudioResult(
+        response: fullTranscript,
+        transcript: fullTranscript,
+        summary: 'No summary generated.',
+      );
+    }
+
+    onPhaseUpdate?.call(const LongAudioPhaseUpdate(phase: 'summarize'));
+    return _summarizeFromTranscript(
+      fullTranscript,
+      systemInstruction: systemInstruction,
+      queryInstruction: queryInstruction,
+    );
+  }
+
+  Future<String> _transcribeWithHybridStrategy({
+    required File audioFile,
+    String? language,
+    void Function(LongAudioPhaseUpdate update)? onPhaseUpdate,
+  }) async {
+    final fileSize = await audioFile.length();
+    final estimatedSeconds = fileSize / _bytesPerSecond16kMonoPcm;
+    final shouldForceSegment =
+        estimatedSeconds >= longAudioConfig.forceSegmentAtSeconds;
+
+    if (!shouldForceSegment) {
+      try {
+        final oneShot = await transcribe(audioFile, language: language);
+        return (oneShot.transcript ?? oneShot.response).trim();
+      } catch (e) {
+        if (!_isTimeoutError(e)) rethrow;
+        debugPrint(
+          'GemmaAudioService: One-shot transcription timed out, retrying with segment mode.',
+        );
+      }
+    }
+
+    return _transcribeBySegments(
+      audioFile: audioFile,
+      onPhaseUpdate: onPhaseUpdate,
+    );
+  }
+
+  Future<String> _transcribeBySegments({
+    required File audioFile,
+    void Function(LongAudioPhaseUpdate update)? onPhaseUpdate,
+  }) async {
+    final segments = await _splitWavIntoSegments(audioFile);
+    if (segments.isEmpty) {
+      throw Exception('Long-audio segment split produced no segments.');
+    }
+
+    final transcripts = <String>[];
+    for (var i = 0; i < segments.length; i++) {
+      final segment = segments[i];
+      onPhaseUpdate?.call(
+        LongAudioPhaseUpdate(
+          phase: 'transcribe_segment',
+          segmentIndex: i + 1,
+          segmentCount: segments.length,
+        ),
+      );
+      final t = await _transcribeSegmentWithRetry(
+        segment.file,
+        segmentIndex: i + 1,
+        segmentCount: segments.length,
+      );
+      transcripts.add(t);
+    }
+
+    onPhaseUpdate?.call(const LongAudioPhaseUpdate(phase: 'merge'));
+    final merged = _mergeTranscripts(transcripts);
+    for (final seg in segments) {
+      try {
+        await seg.file.delete();
+      } catch (_) {}
+    }
+    return merged.trim();
+  }
+
+  Future<String> _transcribeSegmentWithRetry(
+    File segmentFile, {
+    required int segmentIndex,
+    required int segmentCount,
+  }) async {
+    Object? lastError;
+    for (
+      var attempt = 0;
+      attempt <= longAudioConfig.segmentRetries;
+      attempt++
+    ) {
+      try {
+        final result = await transcribeSegment(
+          segmentFile,
+          segmentIndex: segmentIndex,
+          segmentCount: segmentCount,
+        );
+        return (result.transcript ?? result.response).trim();
+      } catch (e) {
+        lastError = e;
+        if (attempt == longAudioConfig.segmentRetries) break;
+      }
+    }
+    throw Exception(
+      'Segment $segmentIndex/$segmentCount failed after retries: $lastError',
+    );
+  }
+
+  bool _isTimeoutError(Object error) {
+    final msg = error.toString().toLowerCase();
+    return msg.contains('inference timeout') || msg.contains('timeout');
+  }
+
+  Future<GemmaAudioResult> _summarizeFromTranscript(
+    String fullTranscript, {
+    String? systemInstruction,
+    String? queryInstruction,
+  }) async {
+    const int kMaxWordsPerChunk = 3000;
+    const int kOverlapWords = 100;
+
+    final words = fullTranscript.split(RegExp(r'\s+'));
+    if (words.length <= kMaxWordsPerChunk) {
+      return summarizeTranscript(
+        fullTranscript,
+        systemInstruction: systemInstruction,
+        queryInstruction: queryInstruction,
+      );
+    }
+
+    debugPrint(
+      'GemmaAudioService: Transcript is long (${words.length} words). Using chunked summarization.',
+    );
+    final chunks = <String>[];
+    for (var i = 0; i < words.length; i += kMaxWordsPerChunk - kOverlapWords) {
+      final end = (i + kMaxWordsPerChunk < words.length)
+          ? i + kMaxWordsPerChunk
+          : words.length;
+      chunks.add(words.sublist(i, end).join(' '));
+      if (end == words.length) break;
+    }
+
+    final chunkSummaries = <String>[];
+    for (var i = 0; i < chunks.length; i++) {
+      final chunkPrompt =
+          'Summarize this section (${i + 1}/${chunks.length}) of a meeting transcript. '
+          'Focus on key points, decisions, and action items. Keep it concise.';
+      final chunkSummary = await chatWithTranscript(chunks[i], chunkPrompt);
+      chunkSummaries.add('Section ${i + 1} Summary:\n$chunkSummary');
+    }
+
+    final finalMergePrompt =
+        'Based on the following section summaries, create a single consolidated meeting summary. '
+        'Use the exact Markdown format: ## TITLE, ## SUMMARY, ## KEY POINTS, ## ACTION ITEMS.';
+    final finalResponse = await chatWithTranscript(
+      chunkSummaries.join('\n\n---\n\n'),
+      finalMergePrompt,
+    );
+    return GemmaAudioResult.parse(finalResponse, transcript: fullTranscript);
+  }
+
+  Future<List<_SegmentFile>> _splitWavIntoSegments(File wavFile) async {
+    final bytes = await wavFile.readAsBytes();
+    if (bytes.length < 44) {
+      throw Exception('Invalid WAV: file too short');
+    }
+
+    final header = bytes.sublist(0, 44);
+    final pcm = bytes.sublist(44);
+    final bytesPerSecond = _bytesPerSecond16kMonoPcm;
+    final segmentBytes = longAudioConfig.segmentSeconds * bytesPerSecond;
+    final overlapBytes = longAudioConfig.overlapSeconds * bytesPerSecond;
+    final stepBytes = (segmentBytes - overlapBytes).clamp(1, segmentBytes);
+
+    final out = <_SegmentFile>[];
+    var start = 0;
+    var index = 0;
+    while (start < pcm.length) {
+      final end = (start + segmentBytes < pcm.length)
+          ? start + segmentBytes
+          : pcm.length;
+      final segmentPcm = pcm.sublist(start, end);
+      final segFile = File(
+        '${wavFile.parent.path}/seg_${DateTime.now().microsecondsSinceEpoch}_$index.wav',
+      );
+      await _writeWav(segFile, header, segmentPcm);
+      out.add(_SegmentFile(file: segFile));
+      if (end == pcm.length) break;
+      start += stepBytes;
+      index++;
+    }
+    return out;
+  }
+
+  Future<void> _writeWav(File file, List<int> header44, List<int> pcm) async {
+    final out = Uint8List(44 + pcm.length);
+    out.setRange(0, 44, header44);
+    out.setRange(44, out.length, pcm);
+    final bd = ByteData.sublistView(out);
+    bd.setUint32(4, 36 + pcm.length, Endian.little);
+    bd.setUint32(40, pcm.length, Endian.little);
+    await file.writeAsBytes(out, flush: true);
+  }
+
+  String _mergeTranscripts(List<String> transcripts) {
+    if (transcripts.isEmpty) return '';
+    var merged = transcripts.first.trim();
+    for (var i = 1; i < transcripts.length; i++) {
+      final current = transcripts[i].trim();
+      merged = _appendWithOverlapDedupe(
+        merged,
+        current,
+        overlapWindowWords: longAudioConfig.mergeOverlapWords,
+      );
+    }
+    return merged;
+  }
+
+  String _appendWithOverlapDedupe(
+    String left,
+    String right, {
+    required int overlapWindowWords,
+  }) {
+    final leftWords = left
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    final rightWords = right
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    if (leftWords.isEmpty) return right;
+    if (rightWords.isEmpty) return left;
+
+    final maxK = math.min(
+      overlapWindowWords,
+      math.min(leftWords.length, rightWords.length),
+    );
+    var bestK = 0;
+    for (var k = maxK; k >= 1; k--) {
+      final leftTail = leftWords
+          .sublist(leftWords.length - k)
+          .join(' ')
+          .toLowerCase();
+      final rightHead = rightWords.sublist(0, k).join(' ').toLowerCase();
+      if (leftTail == rightHead) {
+        bestK = k;
+        break;
+      }
+    }
+    final dedupedRight = rightWords.sublist(bestK).join(' ');
+    if (dedupedRight.isEmpty) return left;
+    return '$left $dedupedRight'.trim();
   }
 
   /// Dispose of resources.
@@ -613,4 +1001,37 @@ class GemmaAudioService {
       debugPrint('GemmaAudioService: Dispose failed: ${e.message}');
     }
   }
+}
+
+class LongAudioConfig {
+  final int segmentSeconds;
+  final int overlapSeconds;
+  final int segmentRetries;
+  final int forceSegmentAtSeconds;
+  final int mergeOverlapWords;
+
+  const LongAudioConfig({
+    this.segmentSeconds = 45,
+    this.overlapSeconds = 6,
+    this.segmentRetries = 1,
+    this.forceSegmentAtSeconds = 120,
+    this.mergeOverlapWords = 40,
+  });
+}
+
+class LongAudioPhaseUpdate {
+  final String phase;
+  final int? segmentIndex;
+  final int? segmentCount;
+
+  const LongAudioPhaseUpdate({
+    required this.phase,
+    this.segmentIndex,
+    this.segmentCount,
+  });
+}
+
+class _SegmentFile {
+  final File file;
+  _SegmentFile({required this.file});
 }

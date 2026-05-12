@@ -10,6 +10,17 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "28.2.13676358"
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -26,9 +37,13 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 26  // Bumped to 26 for better native support
+        ndk {
+            abiFilters += setOf("arm64-v8a")
+        }
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("String", "LITERT_LM_VERSION", "\"0.11.0\"")
     }
 
     buildTypes {
@@ -47,8 +62,9 @@ flutter {
 }
 
 dependencies {
-    // LiteRT-LM runtime for bundled Gemma 4 E2B multimodal inference
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    // LiteRT-LM runtime for bundled Gemma 4 E2B multimodal inference.
+    // Pin 0.11.0 because this is the first release with Gemma 4 MTP support.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.11.0")
     
     // OkHttp for model downloading from HuggingFace
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
