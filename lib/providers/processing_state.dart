@@ -250,6 +250,14 @@ OUTPUT: Only the romanized transcript. Nothing else.""";
   // Predefined built-in presets
   static final List<PromptPreset> predefinedPresets = [
     PromptPreset(
+      name: '🛡️ Default Preset',
+      systemInstruction: defaultSystemInstruction,
+      queryInstruction: defaultQueryInstruction,
+      transcriptionSystem: defaultTranscriptionSystem,
+      transcriptionPrompt: defaultTranscriptionPrompt,
+      isBuiltIn: true,
+    ),
+    PromptPreset(
       name: '📋 Meeting Minutes',
       systemInstruction: '''You are a meeting notes specialist.
 
