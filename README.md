@@ -118,6 +118,28 @@ The Android integration pins **LiteRT-LM 0.11.0+** for Gemma 4 speculative-decod
 flutter run --release
 ```
 
+### 2.1 Android User/Profile Install Notes
+On some Samsung devices, Android can expose multiple user profiles such as the primary user (`User 0`), `DUAL_APP`, or `Secure Folder`. For this app, installs should remain on the primary user only.
+
+Use these checks before or after installing:
+
+```bash
+adb shell pm list users
+adb shell dumpsys package com.voicenotesummarizer.vm_summ | rg 'User [0-9]+:|installed='
+```
+
+Expected state:
+*   `User 0`: `installed=true`
+*   Any secondary profile such as `DUAL_APP` or `Secure Folder`: `installed=false`
+
+If the app appears twice in the launcher, it is usually the same package installed into a secondary Samsung profile rather than a second app ID. Remove only the secondary-profile install and keep the primary one:
+
+```bash
+adb shell pm uninstall --user 95 com.voicenotesummarizer.vm_summ
+```
+
+Replace `95` with the actual secondary user ID reported by `adb shell pm list users`.
+
 ---
 
 ## 📝 Usage Guide

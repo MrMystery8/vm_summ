@@ -37,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isRecording = false;
   bool _isPaused = false;
   bool _isStopping = false;
+  bool _isCancelling = false;
   bool _isLoadingHistory = true;
   List<SummaryRecord> _historyRecords = [];
   _AccordionSection? _openSection;
@@ -104,8 +105,20 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     final state = context.read<ProcessingState>();
     if (state.modelStatus != ModelStatus.ready) {
-      unawaited(state.initialize());
+      unawaited(_initializeModel(state));
     }
+  }
+
+  Future<void> _initializeModel(ProcessingState state) async {
+    debugPrint(
+      'HomeScreen: model init requested '
+      '(recording=$_isRecording paused=$_isPaused model=${state.modelStatus})',
+    );
+    await state.initialize();
+    debugPrint(
+      'HomeScreen: model init completed '
+      '(recording=$_isRecording paused=$_isPaused model=${state.modelStatus})',
+    );
   }
 
   void _toggleSection(_AccordionSection section) {
@@ -166,6 +179,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startRecording() async {
+    final state = context.read<ProcessingState>();
+    debugPrint(
+      'HomeScreen: start recording requested '
+      '(recording=$_isRecording paused=$_isPaused model=${state.modelStatus})',
+    );
     final success = await _recorderService.startRecording();
     if (!success && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -180,12 +198,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _stopRecording() async {
-    if (_isStopping) return;
+    if (_isStopping || _isCancelling) return;
+    final state = context.read<ProcessingState>();
+    debugPrint(
+      'HomeScreen: stop recording requested '
+      '(recording=$_isRecording paused=$_isPaused model=${state.modelStatus})',
+    );
     setState(() => _isStopping = true);
     try {
       final file = await _recorderService.stopRecording();
       if (file != null && mounted) {
-        final state = context.read<ProcessingState>();
         state.queueFile(file);
         if (state.modelStatus == ModelStatus.ready) {
           widget.onProcessingStart?.call();
@@ -208,16 +230,29 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pauseRecording() async {
+    debugPrint(
+      'HomeScreen: pause recording requested '
+      '(recording=$_isRecording paused=$_isPaused)',
+    );
     await _recorderService.pauseRecording();
   }
 
   Future<void> _resumeRecording() async {
+    debugPrint(
+      'HomeScreen: resume recording requested '
+      '(recording=$_isRecording paused=$_isPaused)',
+    );
     await _recorderService.resumeRecording();
   }
 
   Future<void> _cancelRecording() async {
-    if (_isStopping) return;
-    setState(() => _isStopping = true);
+    if (_isCancelling) return;
+    final state = context.read<ProcessingState>();
+    debugPrint(
+      'HomeScreen: cancel recording requested '
+      '(recording=$_isRecording paused=$_isPaused model=${state.modelStatus})',
+    );
+    setState(() => _isCancelling = true);
     try {
       await _recorderService.cancelRecording();
       if (!mounted) return;
@@ -229,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _isStopping = false);
+      if (mounted) setState(() => _isCancelling = false);
     }
   }
 
